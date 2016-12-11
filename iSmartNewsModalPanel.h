@@ -4,27 +4,16 @@
 //
 //
 
-#if SMARTNEWS_COMPILE
-
 #import <UIKit/UIKit.h>
+#import "iSmartNewsPublic.h"
 
 @class iSmartNewsModalPanel;
-
-typedef NS_ENUM(NSInteger, iSmartNewsModalPanelCloseType) {
-    iSmartNewsModalPanelCloseSimple,
-    iSmartNewsModalPanelCloseRemoveAds,
-    iSmartNewsModalPanelCloseForced
-};
-
-@protocol iSmartNewsModalPanelDelegate
-@optional
-- (void)didCloseModalPanel:(iSmartNewsModalPanel *)modalPanel type:(iSmartNewsModalPanelCloseType)type;
-@end
 
 typedef void (^iSmartNewsUAModalDisplayPanelEvent)(iSmartNewsModalPanel* panel);
 typedef void (^iSmartNewsUAModalDisplayPanelAnimationComplete)(BOOL finished);
 
-@interface iSmartNewsModalPanel : UIView {
+@interface iSmartNewsModalPanel : UIView<iSmartNewsPanelProtocol>
+{
     
     UIView			*contentContainer;
     UIView			*roundedRect;
@@ -45,15 +34,21 @@ typedef void (^iSmartNewsUAModalDisplayPanelAnimationComplete)(BOOL finished);
     
 }
 
-@property (nonatomic,weak) NSObject<iSmartNewsModalPanelDelegate>	*delegate;
+@property (nonatomic,weak) NSObject<iSmartNewsPanelDelegate>	*delegate;
+
+@property (nonatomic, readonly) NSString* uuid;
+@property (nonatomic, readwrite, assign) BOOL isReady;
+
+-(void) placeContent:(UIView*) content;
+
 @property (nonatomic, retain) UIView		*contentContainer;
 @property (nonatomic, retain) UIView		*roundedRect;
 @property (nonatomic, retain) UIButton		*closeButton;
 @property (nonatomic, retain) UIButton		*removeAdsButton;
 @property (nonatomic, retain) UIButton		*actionButton;
 @property (nonatomic, retain) UIView		*contentView;
-@property (nonatomic,copy) NSString* customAnimation;
-@property (nonatomic,assign) BOOL disableBuiltinAnimations;
+@property (nonatomic, copy)   NSString*     customAnimation;
+@property (nonatomic, assign) BOOL          disableBuiltinAnimations;
 
 @property (nonatomic,copy) NSString* closePosition;
 @property (nonatomic,copy) NSString* removeAdsPosition;
@@ -73,17 +68,16 @@ typedef void (^iSmartNewsUAModalDisplayPanelAnimationComplete)(BOOL finished);
 // Shows the bounce animation. Default = YES
 @property (nonatomic, assign) BOOL			shouldBounce;
 
+@property (nonatomic, assign) BOOL          showRemoveAdsButton;
+
 - (void)show;
 - (void)showFromPoint:(CGPoint)point;
-- (void)hide:(iSmartNewsModalPanelCloseType)type;
+//- (void)hide:(iSmartNewsPanelCloseType)type;
 
 - (CGRect)roundedRectFrame;
 - (CGRect)closeButtonFrame;
 - (CGRect)removeAdsButtonFrame;
 - (CGRect)contentViewFrame;
 - (void)showImmediately;
-@property (nonatomic,assign) BOOL showRemoveAdsButton;
 @end
-
-#endif//#if SMARTNEWS_COMPILE
 

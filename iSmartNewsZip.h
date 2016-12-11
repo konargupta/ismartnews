@@ -4,12 +4,6 @@
 //
 //
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-    
-    __attribute__((visibility("hidden"))) int smartnews_unzip(const char* from, const char* to);
-    
-#ifdef __cplusplus
-}
-#endif
+#import "iSmartNewsPublic.h"
+
+EXTERN_C INTERNAL_ATTRIBUTES int smartnews_unzip(const char* from, const char* to);

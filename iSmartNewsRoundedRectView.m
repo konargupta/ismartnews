@@ -4,7 +4,7 @@
 //
 //
 
-#if SMARTNEWS_COMPILE
+#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)
 
 #if !__has_feature(objc_arc)
 # error File should be compiled with ARC support (use '-fobjc-arc' flag)!
@@ -58,4 +58,4 @@
 
 @end
 
-#endif//#if SMARTNEWS_COMPILE
+#endif//#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)

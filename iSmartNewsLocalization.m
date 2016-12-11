@@ -6,7 +6,7 @@
 
 #import "iSmartNewsLocalization.h"
 
-#if SMARTNEWS_COMPILE
+#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)
 
 #if !__has_feature(objc_arc)
 # error File should be compiled with ARC support (use '-fobjc-arc' flag)!
@@ -152,4 +152,4 @@ NSString* news_reviewLater()
     return [newsLocalizedStrings() objectForKey:@"Later"];
 }
 
-#endif//#if SMARTNEWS_COMPILE
+#endif//#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)

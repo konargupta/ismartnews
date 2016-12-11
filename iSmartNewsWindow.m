@@ -4,20 +4,16 @@
 //
 //
 
-#ifndef SMARTNEWS_COMPILE
-//#define  SMARTNEWS_COMPILE 1
-#endif
-#if SMARTNEWS_COMPILE
+#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)
 
 #if !__has_feature(objc_arc)
 # error File should be compiled with ARC support (use '-fobjc-arc' flag)!
 #endif
 
 #import "iSmartNewsWindow.h"
+#import "iSmartNewsInternal.h"
 
-#ifndef STR_SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO
-# define STR_SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(v) ([[[UIDevice currentDevice] systemVersion] compare:v options:NSNumericSearch] != NSOrderedAscending)
-#endif
+#import <AVFoundation/AVFoundation.h>
 
 @implementation iSmartNewsWindow{
     NSTimer* _timer;
@@ -28,14 +24,6 @@ static __weak iSmartNewsWindow* cachedWindow = nil;
 
 + (instancetype)newsWindow
 {
-    if ([[[UIDevice currentDevice] systemVersion] hasPrefix:@"8."])
-    {
-        static dispatch_once_t onceToken;
-        dispatch_once(&onceToken, ^{
-            [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(fix_ios8_alertwindow:) name:UIWindowDidBecomeVisibleNotification object:nil];
-        });
-    }
-    
     iSmartNewsWindow* w;
     w = cachedWindow;
     if (!w){
@@ -45,14 +33,6 @@ static __weak iSmartNewsWindow* cachedWindow = nil;
     return w;
 }
 
-+ (void)fix_ios8_alertwindow:(NSNotification*)notification
-{
-    if ([notification.object class] == NSClassFromString(@"_UIAlertControllerShimPresenterWindow"))
-    {
-        UIWindow* alertWindow = notification.object;
-        alertWindow.frame = [[self class] screenBounds];
-    }
-}
 
 - (void)killWindow
 {
@@ -108,22 +88,36 @@ static __weak iSmartNewsWindow* cachedWindow = nil;
     _timer = nil;
 }
 
++(void)load
+{
+    is_playerView(nil);
+}
+
 static BOOL is_playerView(UIView*v)
 {
     static Class c = nil;
-    if (!c)
-        c = NSClassFromString(@"AVPlayerView");
+    if (c == nil)
+    {
+        NSString* cn = [@"AVPlayer" stringByAppendingString:@"View"];
+        assert([@"AVPlayerView" isEqualToString:cn]);
+        c = NSClassFromString(cn);
+    }
     
-    if (!c)
+    if (c == nil)
         return NO;
     
-    if ([v isKindOfClass:c]){
+    if ([v isKindOfClass:c])
+    {
         return YES;
     }
     
     for (UIView* s in [v subviews])
+    {
         if (is_playerView(s))
+        {
             return YES;
+        }
+    }
     
     return NO;
 }
@@ -135,8 +129,7 @@ static BOOL is_playerView(UIView*v)
     
     if (![self isKeyWindow])
     {
-        if ((UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPhone)
-            && STR_SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(@"8.0"))
+        if ((UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPhone) && STR_SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(@"8.0"))
         {
             UIWindow* window = [[UIApplication sharedApplication] keyWindow];
             UIViewController* controller = window.rootViewController;
@@ -184,4 +177,4 @@ static BOOL is_playerView(UIView*v)
 
 @end
 
-#endif//#if SMARTNEWS_COMPILE
+#endif//#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)

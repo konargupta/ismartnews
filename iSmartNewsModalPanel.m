@@ -4,15 +4,14 @@
 //
 //
 
-#if SMARTNEWS_COMPILE
+#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)
 
 #if !__has_feature(objc_arc)
 # error File should be compiled with ARC support (use '-fobjc-arc' flag)!
 #endif
 
 #import "iSmartNewsModalPanel.h"
-#import "iSmartNewsImages.h"
-#import "iSmartNewsUtils.h"
+#import "iSmartNewsInternal.h"
 
 #define DEFAULT_MARGIN				20.0f
 #define DEFAULT_BACKGROUND_COLOR	[UIColor colorWithWhite:0.0 alpha:0.5]
@@ -80,33 +79,97 @@
     self.delegate = nil;
 }
 
+
+#pragma mark - New
+
+-(NSString *)uuid
+{
+    return @"popup_modal";
+}
+
+-(void) placeContent:(UIView*) content
+{
+    for (UIView* subview in [[self contentView] subviews])
+    {
+        if ([content isEqual:subview])
+            continue;
+        
+        [subview removeFromSuperview];
+    }
+    
+    if (content != nil)
+    {
+        [[self contentView] addSubview:content];
+        
+        CGRect frame = [[self contentView] frame];
+        frame.origin = CGPointZero;
+
+        content.frame = frame;
+        
+        [content setAutoresizingMask:(UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight)];
+    }
+    //[content setBackgroundColor:[UIColor clearColor]];
+}
+
+-(void)setIsReady:(BOOL)isReady
+{
+    if (_isReady != isReady)
+    {
+        _isReady = isReady;
+        
+        if ([[self delegate] respondsToSelector:@selector(panelDidChangeStatus:)])
+        {
+            [[self delegate] panelDidChangeStatus:self];
+        }
+    }
+}
+
+-(BOOL)isActive
+{
+    return YES;
+}
+
+-(void)setActive:(BOOL)active
+{
+    //Not applicable for ModalPanel
+    assert(active == YES);
+}
+
 #pragma mark - Description
 
-- (NSString *)description {
+- (NSString *)description
+{
     return [NSString stringWithFormat:@"<%@ %ld>", [[self class] description], (long)self.tag];
 }
 
 #pragma mark - Accessors
-
-- (void)setCornerRadius:(CGFloat)newRadius {
+- (void)setCornerRadius:(CGFloat)newRadius
+{
     cornerRadius = newRadius;
     self.roundedRect.layer.cornerRadius = cornerRadius;
 }
-- (void)setBorderWidth:(CGFloat)newWidth {
+
+- (void)setBorderWidth:(CGFloat)newWidth
+{
     borderWidth = newWidth;
     self.roundedRect.layer.borderWidth = borderWidth;
 }
-- (void)setBorderColor:(UIColor *)newColor {
+
+- (void)setBorderColor:(UIColor *)newColor
+{
     borderColor = newColor;
     self.roundedRect.layer.borderColor = [borderColor CGColor];
 }
-- (void)setContentColor:(UIColor *)newColor {
+- (void)setContentColor:(UIColor *)newColor
+{
     contentColor = newColor;
     self.roundedRect.backgroundColor = contentColor;
 }
 
-- (UIView *)roundedRect {
-    if (!roundedRect) {
+- (UIView *)roundedRect
+{
+    if (!roundedRect)
+    {
         self.roundedRect = [[UIView alloc] initWithFrame:CGRectZero];
         self.roundedRect.layer.masksToBounds = YES;
         self.roundedRect.backgroundColor = self.contentColor;
@@ -119,7 +182,8 @@
     return roundedRect;
 }
 
-- (UIButton*)removeAdsButton {
+- (UIButton*)removeAdsButton
+{
     if (!removeAdsButton) {
         self.removeAdsButton = [UIButton buttonWithType:UIButtonTypeCustom];
         self.removeAdsButton.hidden = YES;
@@ -139,11 +203,14 @@
         
         [self.removeAdsButton setBounds:CGRectMake(0, 0, s.width + 10, s.height + 6)];
         
-        self.removeAdsButton.layer.shadowColor = [[UIColor blackColor] CGColor];
-        self.removeAdsButton.layer.shadowOffset = CGSizeMake(0,4);
+        self.removeAdsButton.layer.shadowColor   = [[UIColor blackColor] CGColor];
+        self.removeAdsButton.layer.shadowOffset  = CGSizeMake(0,4);
         self.removeAdsButton.layer.shadowOpacity = 0.3;
+        
+#if DEBUG || ADHOC
         self.removeAdsButton.accessibilityIdentifier = @"iSNRemoveAds";
-        self.removeAdsButton.accessibilityLabel = @"iSNRemoveAds";
+        self.removeAdsButton.accessibilityLabel      = @"iSNRemoveAds";
+#endif
         
         [removeAdsButton addTarget:self action:@selector(removeAdsPressed:) forControlEvents:UIControlEventTouchUpInside];
         [self.contentContainer insertSubview:removeAdsButton aboveSubview:self.contentView];
@@ -151,8 +218,10 @@
     return removeAdsButton;
 }
 
-- (UIButton*)closeButton {
-    if (!closeButton) {
+- (UIButton*)closeButton
+{
+    if (!closeButton)
+    {
         self.closeButton = [UIButton buttonWithType:UIButtonTypeCustom];
         
         NSData* data = [NSData dataWithBytes:(([[UIScreen mainScreen] scale] > 1.f)?close2_png:close_png)
@@ -170,15 +239,21 @@
         
         [self.closeButton addTarget:self action:@selector(closePressed:) forControlEvents:UIControlEventTouchUpInside];
         [self.contentContainer insertSubview:closeButton aboveSubview:self.contentView];
+        
+#if DEBUG || ADHOC
         self.closeButton.accessibilityIdentifier = @"iSNClose";
-        self.closeButton.accessibilityLabel = @"iSNClose";
+        self.closeButton.accessibilityLabel      = @"iSNClose";
+#endif
+
     }
     return closeButton;
 }
 
-- (UIView *)contentView {
-    if (!contentView) {
-        self.contentView = [[UIView alloc] initWithFrame:CGRectZero];
+- (UIView *)contentView
+{
+    if (!contentView)
+    {
+        self.contentView = [[UIView alloc] initWithFrame:[self contentViewFrame]];
         self.contentView.autoresizingMask = UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         self.contentView.autoresizesSubviews = YES;
         [self.contentContainer insertSubview:contentView aboveSubview:self.roundedRect];
@@ -186,7 +261,8 @@
     return contentView;
 }
 
-- (CGRect)roundedRectFrame {
+- (CGRect)roundedRectFrame
+{
     
     return CGRectMake(self.margin.left + self.bounds.origin.x,
                       self.margin.top + self.bounds.origin.y,
@@ -194,30 +270,35 @@
                       self.bounds.size.height - self.margin.top - self.margin.bottom);
 }
 
-- (CGRect)closeButtonFrame {
+- (CGRect)closeButtonFrame
+{
     CGRect f = [self roundedRectFrame];
-    if (self.closePosition && [self.closePosition isEqualToString:@"top-right"]){
+    if (self.closePosition && [self.closePosition isEqualToString:@"top-right"])
+    {
         return CGRectMake(CGRectGetMaxX(f) - floor(closeButton.bounds.size.width),// - floor(closeButton.frame.size.width*0.5),
                           f.origin.y,
                           closeButton.frame.size.width,
                           closeButton.frame.size.height);
         
     }
-    else if (self.closePosition && [self.closePosition isEqualToString:@"bottom-left"]){
+    else if (self.closePosition && [self.closePosition isEqualToString:@"bottom-left"])
+    {
         return CGRectMake(f.origin.x,// - floor(closeButton.frame.size.width*0.5),
                           CGRectGetMaxY(f) - floor(closeButton.bounds.size.height),
                           closeButton.frame.size.width,
                           closeButton.frame.size.height);
 
     }
-    else if (self.closePosition && [self.closePosition isEqualToString:@"bottom-right"]){
+    else if (self.closePosition && [self.closePosition isEqualToString:@"bottom-right"])
+    {
         return CGRectMake(CGRectGetMaxX(f) - floor(closeButton.bounds.size.width),
                           CGRectGetMaxY(f) - floor(closeButton.bounds.size.height),
                           closeButton.frame.size.width,
                           closeButton.frame.size.height);
         
     }
-    else {
+    else
+    {
         return CGRectMake(f.origin.x,// - floor(closeButton.frame.size.width*0.5),
                           f.origin.y,// - floor(closeButton.frame.size.height*0.5),
                           closeButton.frame.size.width,
@@ -225,27 +306,32 @@
     }
 }
 
-- (CGRect)removeAdsButtonFrame {
+- (CGRect)removeAdsButtonFrame
+{
     CGRect f = [self roundedRectFrame];
-    if (self.removeAdsPosition && [self.removeAdsPosition isEqualToString:@"bottom-left"]){
+    if (self.removeAdsPosition && [self.removeAdsPosition isEqualToString:@"bottom-left"])
+    {
         return CGRectMake(10,
                           CGRectGetMaxY(f) - floor(removeAdsButton.bounds.size.height) - 10,// - floor(closeButton.frame.size.height*0.5),
                           removeAdsButton.frame.size.width,
                           removeAdsButton.frame.size.height);
     }
-    else if (self.removeAdsPosition && [self.removeAdsPosition isEqualToString:@"bottom-right"]){
+    else if (self.removeAdsPosition && [self.removeAdsPosition isEqualToString:@"bottom-right"])
+    {
         return CGRectMake(CGRectGetMaxX(f) - floor(removeAdsButton.bounds.size.width) - 10,
                           CGRectGetMaxY(f) - floor(removeAdsButton.bounds.size.height) - 10,// - floor(closeButton.frame.size.height*0.5),
                           removeAdsButton.frame.size.width,
                           removeAdsButton.frame.size.height);
     }
-    else if (self.removeAdsPosition && [self.removeAdsPosition isEqualToString:@"top-left"]){
+    else if (self.removeAdsPosition && [self.removeAdsPosition isEqualToString:@"top-left"])
+    {
         return CGRectMake(10,
                           (44.f - removeAdsButton.bounds.size.height)/2,// - floor(closeButton.frame.size.height*0.5),
                           removeAdsButton.frame.size.width,
                           removeAdsButton.frame.size.height);
     }
-    else {
+    else
+    {
         return CGRectMake(CGRectGetMaxX(f) - floor(removeAdsButton.bounds.size.width) - 10,
                           (44.f - removeAdsButton.bounds.size.height)/2,// - floor(closeButton.frame.size.height*0.5),
                           removeAdsButton.frame.size.width,
@@ -253,7 +339,8 @@
     }
 }
 
-- (CGRect)actionButtonFrame {
+- (CGRect)actionButtonFrame
+{
     if (![[self.actionButton titleForState:UIControlStateNormal] length])
         return CGRectZero;
     
@@ -265,7 +352,8 @@
                       self.actionButton.frame.size.height);
 }
 
-- (CGRect)contentViewFrame {
+- (CGRect)contentViewFrame
+{
     CGRect roundedRectFrame = [self roundedRectFrame];
     return CGRectMake(self.padding.left + roundedRectFrame.origin.x,
                       self.padding.top + roundedRectFrame.origin.y,
@@ -273,7 +361,8 @@
                       roundedRectFrame.size.height - self.padding.top - self.padding.bottom);
 }
 
-- (void)layoutSubviews {
+- (void)layoutSubviews
+{
     [super layoutSubviews];
     
     self.roundedRect.frame	= [self roundedRectFrame];
@@ -281,15 +370,32 @@
     self.removeAdsButton.frame	= [self removeAdsButtonFrame];
     self.actionButton.frame	= [self actionButtonFrame];
     self.contentView.frame	= [self contentViewFrame];
+    
+    if (STR_SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(@"8.0"))
+    {
+        CGRect frame = [[self contentView] frame];
+        frame.origin = CGPointZero;
+        
+        for (UIView* subview in [[self contentView] subviews])
+        {
+            [subview setFrame:frame];
+        }
+    }
 }
 
-- (void)removeAdsPressed:(id)sender{
-    [self hide:iSmartNewsModalPanelCloseRemoveAds];
+#pragma mark - Actions
+
+- (void)removeAdsPressed:(id)sender
+{
+    [self hide:iSmartNewsPanelCloseRemoveAds];
 }
 
-- (void)closePressed:(id)sender {
-    [self hide:iSmartNewsModalPanelCloseSimple];
+- (void)closePressed:(id)sender
+{
+    [self hide:iSmartNewsPanelCloseSimple];
 }
+
+#pragma mark - Show
 
 - (void)showAnimationStarting {};		//subclasses override
 - (void)showAnimationPart1Finished {};	//subclasses override
@@ -297,13 +403,13 @@
 - (void)showAnimationPart3Finished {};	//subclasses override
 - (void)showAnimationFinished {};		//subclasses override
 
-- (void)show {
-    
+- (void)show
+{
     [self showAnimationStarting];
-    
     self.alpha = 0.0;
-
-    if ([self.customAnimation isEqualToString:@"fade"]){
+    
+    if ([self.customAnimation isEqualToString:@"fade"])
+    {
         
         self.contentContainer.transform = CGAffineTransformIdentity;
         
@@ -319,7 +425,8 @@
         }];
 
     }
-    else {
+    else
+    {
         self.contentContainer.transform = CGAffineTransformMakeScale(0.00001, 0.00001);
         
         void (^animationBlock)(BOOL) = ^(BOOL finished) {
@@ -384,23 +491,29 @@
     [self show];
 }
 
-- (void)hide:(iSmartNewsModalPanelCloseType)type {
+- (void)hide:(iSmartNewsPanelCloseType)type
+{
+    NSObject<iSmartNewsPanelDelegate>* delegate = self.delegate;
     
-    NSObject<iSmartNewsModalPanelDelegate>	*delegate = self.delegate;
-    
-    if (self.disableBuiltinAnimations){
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.01 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            
-            [self removeFromSuperview];
-            
-            if ([delegate respondsToSelector:@selector(didCloseModalPanel:type:)]) {
-                [delegate didCloseModalPanel:self type:type];
-            }
+    dispatch_block_t removeFromSuperViewAndCallDelegate = [^{
         
-        });
+        [self removeFromSuperview];
+        
+        if ([delegate respondsToSelector:@selector(panel:didCloseWithType:)])
+        {
+            [delegate panel:self didCloseWithType:type];
+        }
+        
+    } copy];
+    
+    if (self.disableBuiltinAnimations)
+    {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.01 * NSEC_PER_SEC)), dispatch_get_main_queue(), removeFromSuperViewAndCallDelegate);
     }
-    else {
-        if ([self.customAnimation isEqualToString:@"fade"]){
+    else
+    {
+        if ([self.customAnimation isEqualToString:@"fade"])
+        {
             // Hide the view right away
             [UIView animateWithDuration:0.3
                              animations:^{
@@ -408,30 +521,24 @@
                              }
                              completion:^(BOOL finished){
                                  
-                                 [self removeFromSuperview];
-                                 
-                                 if ([delegate respondsToSelector:@selector(didCloseModalPanel:type:)]) {
-                                     [delegate didCloseModalPanel:self type:type];
-                                 }
+                                 removeFromSuperViewAndCallDelegate();
                              }];
         }
-        else {
+        else
+        {
             // Hide the view right away
             [UIView animateWithDuration:0.3
                              animations:^{
                                  self.alpha = 0;
-                                 if (startEndPoint.x != CGPointZero.x || startEndPoint.y != CGPointZero.y) {
+                                 if (startEndPoint.x != CGPointZero.x || startEndPoint.y != CGPointZero.y)
+                                 {
                                      self.contentContainer.center = startEndPoint;
                                  }
                                  self.contentContainer.transform = CGAffineTransformMakeScale(0.0001, 0.0001);
                              }
                              completion:^(BOOL finished){
                                  
-                                 [self removeFromSuperview];
-                                 
-                                 if ([delegate respondsToSelector:@selector(didCloseModalPanel:type:)]) {
-                                     [delegate didCloseModalPanel:self type:type];
-                                 } 
+                                 removeFromSuperViewAndCallDelegate();
                              }];
         }
     }
@@ -439,4 +546,4 @@
 
 @end
 
-#endif//#if SMARTNEWS_COMPILE
+#endif//#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)

@@ -4,9 +4,8 @@
 //
 //
 
-#if SMARTNEWS_COMPILE
-
 #import <UIKit/UIKit.h>
+#import "iSmartNewsPublic.h"
 
 @interface iSmartNewsRoundedRectView : UIView {
     NSInteger	radius;
@@ -18,5 +17,3 @@
 - (void)setColors:(CGFloat *)components;
 
 @end
-
-#endif//#if SMARTNEWS_COMPILE

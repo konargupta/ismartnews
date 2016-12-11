@@ -5,31 +5,34 @@
 //
 
 #import <UIKit/UIKit.h>
+#import "iSmartNewsPublic.h"
 
 @interface NSArray(SmartNews)
-- (NSString*)sn_join:(NSString*)sep;
+- (NSString*_Nonnull)sn_join:(NSString*_Nonnull)sep;
 - (BOOL)sn_isStrings;
 - (BOOL)sn_isDates;
 @end
 
 @interface UIView (iSmartNewsFindFirstResponder)
-- (id)iSmartNewsFindFirstResponder_findFirstResponder;
+- (id _Nullable)iSmartNewsFindFirstResponder_findFirstResponder;
 @end
 
-id getMessageKey(NSDictionary* _dict, NSString* _key);
-void extractSmartNewsMessage(NSDictionary* desc, NSMutableDictionary* message);
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES BOOL sn_allowUpdate();
+
+id _Nullable getMessageKey(NSDictionary* _Nullable _dict, NSString* _Nonnull _key);
+void extractSmartNewsMessage(NSDictionary* _Nonnull desc, NSMutableDictionary* _Nonnull message);
 void clearNewsLang();
 
-NSString* smartNewsAlertDomain();
-NSString* RemoveAdsString();
+NSString* _Nonnull smartNewsAlertDomain();
+NSString* _Nullable RemoveAdsString();
 
-NSSet* sn_protectedItems();
+NSSet* _Nonnull sn_protectedItems();
 
 @interface NSDate(iSmartNews)
-- (NSUInteger)iSmartNews_calendarIntervalSinceDate:(NSDate*)sinceDate;
+- (NSUInteger)iSmartNews_calendarIntervalSinceDate:(NSDate* _Nullable)sinceDate;
 @end
 
-NSString* stringFromNSURLComponents(NSURLComponents* components);
+NSString* _Nonnull stringFromNSURLComponents(NSURLComponents* _Nonnull components);
 
 @interface NSDictionary (iSmartNewsLowercaseKeys)
 
@@ -37,20 +40,23 @@ NSString* stringFromNSURLComponents(NSURLComponents* components);
  Recursive algorithm to find all nested dictionary keys and create an NSMutableDictionary copy with all keys converted to lowercase.
  Returns an NSMutableDictionary with all keys and nested keys converted to lowercase.
  */
-+ (NSMutableDictionary *)iSmartNews_dictionaryWithLowercaseKeysFromDictionary:(NSDictionary *)dictionary;
++ (NSMutableDictionary* _Nonnull)iSmartNews_dictionaryWithLowercaseKeysFromDictionary:(NSDictionary* _Nonnull)dictionary;
 
 /*
  Convienience method to create a new lowercase dictionary object an existing NSDictionary instance
  Returns an NSMutableDictionary with all keys and nested keys converted to lowercase.
  */
-- (NSMutableDictionary *)iSmartNews_dictionaryWithLowercaseKeys;
+- (NSMutableDictionary* _Nonnull)iSmartNews_dictionaryWithLowercaseKeys;
 
-- (id)iSmartNews_objectForKey:(id)key;
+- (id _Nullable )iSmartNews_objectForKey:(id _Nonnull)key;
 
 @end
 
-NSString* news_md5ForDictionary(NSDictionary* _dict);
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES void sn_cleanMessageKeysCache();
+
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSString* _Nonnull sn_md5ForArray(NSArray* _Nullable _array);
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSString* _Nonnull sn_md5ForDictionary(NSDictionary* _Nullable _dict);
 
 @interface NSString (iSmartNews)
-- (nullable NSString *)sn_stringByAddingPercentEncodingForRFC3986;
+- (NSString* _Nullable)sn_stringByAddingPercentEncodingForRFC3986;
 @end

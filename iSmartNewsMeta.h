@@ -5,6 +5,7 @@
 //
 
 #import <CoreData/CoreData.h>
+#import "iSmartNewsPublic.h"
 
-void ism_clearMeta();
-NSDate* preprocessDate(id date);
+INTERNAL_ATTRIBUTES void sn_clearMeta();
+INTERNAL_ATTRIBUTES NSDate* sn_preprocessDate(id date);

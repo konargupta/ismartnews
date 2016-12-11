@@ -4,7 +4,7 @@
 //
 //
 
-#if SMARTNEWS_COMPILE
+#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)
 
 #import "iSmartNewsDate.h"
 
@@ -21,4 +21,4 @@
 
 @end
 
-#endif//#if SMARTNEWS_COMPILE
+#endif//#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)

@@ -5,6 +5,7 @@
 //
 
 #import <Foundation/Foundation.h>
+#import "iSmartNewsPublic.h"
 
 @interface NSDate (iSmartNewsDate)
 + (NSDate*)ism_date;

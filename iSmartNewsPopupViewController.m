@@ -4,20 +4,36 @@
 //
 //
 
-#if SMARTNEWS_COMPILE
+#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)
 
 #if !__has_feature(objc_arc)
 # error File should be compiled with ARC support (use '-fobjc-arc' flag)!
 #endif
 
 #import "iSmartNewsPopupViewController.h"
-#import "iSmartNews+UIApplication.h"
-#import "iSmartNewsModalPanel.h"
-#import "iSmartNewsUtils.h"
+#import "iSmartNewsInternal.h"
 
-#ifndef STR_SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO
-# define STR_SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(v) ([[[UIDevice currentDevice] systemVersion] compare:v options:NSNumericSearch] != NSOrderedAscending)
-#endif
+@implementation iSmartNewsPopupNavigationController
+
+- (BOOL)shouldAutorotate
+{
+    return YES;
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations
+{
+    if (self.allowAllIphoneOrientations){
+        return UIInterfaceOrientationMaskAll;
+    }
+    
+    if (self.orientationMask != 0){
+        return self.orientationMask;
+    }
+    
+    return UIInterfaceOrientationMaskPortrait;
+}
+
+@end
 
 @implementation iSmartNewsPopupViewController{
     BOOL _statusBarHooked;
@@ -25,8 +41,9 @@
 }
 
 - (iSmartNewsModalPanel*)panel{
-    if (!_panel)
+    if (!_panel){
         [self view];
+    }
     return _panel;
 }
 
@@ -35,11 +52,6 @@
     UIView* view = [[UIView alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
     self.view = view;
     [self.view setBackgroundColor:[UIColor clearColor]];
-}
-
-- (void)disableBadGestureRecognizer:(UIView*)view
-{
-
 }
 
 - (void)dealloc
@@ -54,6 +66,12 @@
         return controller;
     }
     return [self topController:c];
+}
+
+- (void)viewDidLayoutSubviews
+{
+    [super viewDidLayoutSubviews];
+    [self.panel setNeedsLayout];
 }
 
 - (void)restoreStatusBar:(BOOL)animated
@@ -109,16 +127,6 @@
         [_panel setMargin:UIEdgeInsetsZero];
         [_panel setBorderWidth:0];
         [self.view addSubview:_panel];
-        
-        if (STR_SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(@"8.0"))
-            [self.webView setFrame:_panel.contentView.bounds];
-        
-        [self.webView setAutoresizingMask:UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight];
-        [self.webView setBackgroundColor:[UIColor clearColor]];
-        
-        [self disableBadGestureRecognizer:self.webView];
-        
-        [_panel.contentView addSubview:self.webView];
     }
 }
 
@@ -157,6 +165,11 @@
     else {
         [_panel showFromPoint:CGPointMake(_panel.superview.bounds.size.width/2, _panel.superview.bounds.size.height/2)];
     }
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        
+        [_panel setIsReady:YES];
+    });
 }
 
 - (BOOL)prefersStatusBarHidden
@@ -176,4 +189,4 @@
 
 @end
 
-#endif//#if SMARTNEWS_COMPILE
+#endif//#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)

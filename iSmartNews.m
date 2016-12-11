@@ -1,3 +1,6 @@
+/*!
+ @file       iSmartNews.m
+ */
 
 #import "iSmartNews.h"
 #include <stdio.h>
@@ -5,8 +8,14 @@
 #import <objc/message.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
+
+#import <StoreKit/StoreKit.h>
+
 #import "iSmartEventsCenter.h"
 #import "iSmartNewsVisualizer.h"
+#import "iSmartNewsDisplayList.h"
+#import "iSmartNewsEmbeddedPanel.h"
+
 
 #if !__has_feature(objc_arc)
 # error File should be compiled with ARC support (use '-fobjc-arc' flag)!
@@ -14,39 +23,35 @@
 
 #pragma clang diagnostic ignored "-Wnullability-completeness"
 
-#ifndef STR_SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO
-# define STR_SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(v) ([[[UIDevice currentDevice] systemVersion] compare:v options:NSNumericSearch] != NSOrderedAscending)
-#endif
-
-#if DEBUG
-# if NO_SMARTNEWS_LOGS
-#  define iSmartNewsLog(...)         ((void)0)
-# else
-#  define iSmartNewsLog(...)         NSLog(@"iSmartNews: %@",[NSString stringWithFormat:__VA_ARGS__])
-# endif
-# define iSmartNewsMainThread       assert([NSThread isMainThread] && "Should be called from main thread only!")
-#else//!DEBUG
-# define NSLog(...)                 ((void)0)
-# ifdef assert
-#  undef assert
-# endif
-# define assert(...)                ((void)0)
-# define iSmartNewsMainThread       ((void)0)
-# define iSmartNewsLog(...)         ((void)0)
-#endif
+#import "iSmartNewsInternal.h"
 
 #ifdef SMARTNEWS_COMPILE
-# undef  SMARTNEWS_COMPILE
-# define SMARTNEWS_COMPILE   0
+# if !ISMARTNEWS_DEMO
+#  undef  SMARTNEWS_COMPILE
+#  define SMARTNEWS_COMPILE     (0)
+# endif
 #else
-# define SMARTNEWS_COMPILE   1
+# define SMARTNEWS_COMPILE      (1)
 #endif
 
-NSString* const iSmartNewsUserDidOpenReviewNotification = @"ISNUDORN27346";
+#pragma mark - Submodules
+
+#if !defined(ISMART_EVENT_CENTER_VERSION) || !defined(ISMART_EVENT_CENTER_VERSION_1_1_2) || (ISMART_EVENT_CENTER_VERSION < ISMART_EVENT_CENTER_VERSION_1_1_2)
+#error Your version of iSmartEventCenter is outdated. Please update iSmartEventCenter submodule
+#endif
+
+#pragma mark -
+
+
+NSString* const iSmartNewsUserDidOpenReviewNotification     = @"ISNUDORN27346";
+NSString* const iSmartNewsDidOpenCallbackNotification       = @"ISNDOCBNF96735026";
+
+NSString* const iSmartNewsDidShowNewsItemNotification       = @"ISNDSNSN77866876";
+NSString* const iSmartNewsDidCloseNewsItemNotification      = @"ISNDCNIN2837598423";
 
 static BOOL UIApplicationWillResignActiveNotificationDone = NO;
-static const char emulateAppActivateKey;
-static const char connectionDataKey;
+//static const char emulateAppActivateKey;
+//static const char connectionDataKey;
 
 #if DEBUG || ADHOC
 static NSURL* OriginalURL = nil;
@@ -152,8 +157,22 @@ extern NSString*  const  iSmartNewsMessageRemindKey;
  @}
  */
 
+extern NSString*  const  iSmartNewsMessageReviewTypeKey;
+
 static const char iSmartNews_hideStatusbar_originalKey;
 static const char iSmartNews_hideStatusbarKey;
+
+
+
+EXTERN_OR_STATIC INLINE_INTERNAL_ATTRIBUTES NSString* _str_i_smrt()
+{
+    return @"iSmart";
+}
+
+EXTERN_OR_STATIC INLINE_INTERNAL_ATTRIBUTES NSString* _str_i_smrt_news()
+{
+    return @"iSmartNews";
+}
 
 
 /*! @cond SkipThis
@@ -161,7 +180,7 @@ static const char iSmartNews_hideStatusbarKey;
  */
 @class iSmartNewsPopupViewController;
 
-@interface iSmartNews() <iSmartNewsVisualizerDelegate>
+@interface iSmartNews() <iSmartNewsDisplayListDelegate, iSmartNewsEmbeddedPanelDelegate, iSmartNewsUpdaterDelegate>
 @property (nonatomic, copy) iSmartEventsCenterCallbackCompletion eventsCenterCompletion;
 @end
 /*! ----------------------------------------------------------------------------
@@ -170,8 +189,8 @@ static const char iSmartNews_hideStatusbarKey;
 
 #import "iSmartNewsCoreData.h"
 #import "iSmartNewsUtils.h"
-#import "iSmartNewsPopupNavigationController.h"
 #import "iSmartNewsMeta.h"
+//#import "iSmartNewsPopupNavigationController.h"
 #import "iSmartNews+UIApplication.h"
 #import "iSmartNewsModalPanel.h"
 #import "iSmartNewsRoundedRectView.h"
@@ -182,14 +201,20 @@ static const char iSmartNews_hideStatusbarKey;
 #import "iSmartNewsZip.h"
 #import "iSmartNewsEvents.h"
 #import "iSmartNewsDate.h"
+#import "iSmartNewsLocalization.h"
+#import "iSmartNewsSegment.h"
+#import "iSmartNewsActions.h"
+
+#import "iSmartNewsUpdate.h"
 
 #if SMARTNEWS_COMPILE
 #import "iSmartNewsCoreData.m"
 #import "iSmartNewsUtils.m"
-#import "iSmartNewsPopupNavigationController.m"
 #import "iSmartNewsMeta.m"
+//#import "iSmartNewsPopupNavigationController.m"
 #import "iSmartNews+UIApplication.m"
 #import "iSmartNewsModalPanel.m"
+#import "iSmartNewsEmbeddedPanel.m"
 #import "iSmartNewsRoundedRectView.m"
 #import "iSmartNewsImages.m"
 #import "iSmartNewsPopupViewController.m"
@@ -199,73 +224,184 @@ static const char iSmartNews_hideStatusbarKey;
 #import "iSmartNewsEvents.m"
 #import "iSmartNewsDate.m"
 #import "iSmartNewsLocalization.m"
+#import "iSmartNewsSegment.m"
+#import "iSmartNewsDisplayList.m"
+#import "iSmartNewsQueuesInfo.m"
+#import "iSmartNewsActions.m"
+
+#import "iSmartNewsUpdate.m"
 #endif
 
 #import <CommonCrypto/CommonDigest.h>
 
-static CanIShowAlertViewRightNowHandler gCanIShowAlertViewRightNow = nil;
+#import "iSmartNewsInternal.h"
 
-NSString*  const  iSmartNewsMessageTitleKey = @"iSmartNewsMessageTitleKey";          //  NSString, message title
-NSString*  const  iSmartNewsMessageTextKey = @"iSmartNewsMessageTextKey";            //  NSString, message text
-NSString*  const  iSmartNewsMessageCancelKey = @"iSmartNewsMessageCancelKey";        //  NSString, title for 'cancel' button
-NSString*  const  iSmartNewsMessageActionKey = @"iSmartNewsMessageActionKey";        //  NSString, title for 'ok' button
-NSString*  const  iSmartNewsMessageReviewKey = @"iSmartNewsMessageReviewKey";
-NSString*  const  iSmartNewsMessageRemindKey = @"iSmartNewsMessageRemindKey";
-NSString*  const  iSmartNewsMessageUrlKey = @"iSmartNewsMessageUrlKey";              //  NSString, url to open if 'ok' was pressed
-NSString*  const  iSmartNewsMessageStartDateKey = @"iSmartNewsMessageStartDateKey";  //  NSDate
-NSString*  const  iSmartNewsMessageEndDateKey = @"iSmartNewsMessageEndDateKey";      //  NSDate
-NSString*  const  iSmartNewsMessageRepeatKey = @"iSmartNewsMessageRepeatKey";        //  NSNumber (as bool)
-NSString*  const  iSmartNewsMessageAlwaysKey = @"iSmartNewsMessageAlwaysKey";        //  NSNumber (as bool)
-NSString*  const  iSmartNewsMessageCounterKey = @"iSmartNewsMessageCounterKey";      //  NSNumber
-NSString*  const  iSmartNewsMessageQueueKey = @"iSmartNewsMessageQueueKey";           //  NSString, name of queue
+static iSmartNewsAllowBlock gCanIShowAlertViewRightNow = nil;
+static iSmartNewsAllowBlock g_fetchHandler = nil;
 
-NSString*  const iSmartNewsMessageTypeKey = @"iSmartNewsMessageTypeKey";             //  NSString, type of message. "web" for web content
-NSString*  const iSmartNewsContentTypeWeb = @"web";
+NSString*  const  iSmartNewsMessageTitleKey     = @"iSmartNewsMessageTitleKey";         //  NSString, message title
+NSString*  const  iSmartNewsMessageTextKey      = @"iSmartNewsMessageTextKey";          //  NSString, message text
+NSString*  const  iSmartNewsMessageCancelKey    = @"iSmartNewsMessageCancelKey";        //  NSString, title for 'cancel' button
+NSString*  const  iSmartNewsMessageActionKey    = @"iSmartNewsMessageActionKey";        //  NSString, title for 'ok' button
+NSString*  const  iSmartNewsMessageReviewKey    = @"iSmartNewsMessageReviewKey";
+NSString*  const  iSmartNewsMessageRemindKey    = @"iSmartNewsMessageRemindKey";
 
-@interface iSmartNews()
-@property (nonatomic,strong,readonly) NSString* service;
-@property (nonatomic,strong,readonly) NSString* settingsPath;
-@property (nonatomic,strong,readonly) NSString* cachePath;
-@end
+NSString*  const  iSmartNewsMessageReviewTypeKey = @"iSmartNewsMessageReviewTypeKey";   //Native ReviewAlert or openURL
 
-@implementation iSmartNews {
+NSString*  const  iSmartNewsMessageUrlKey       = @"iSmartNewsMessageUrlKey";           //  NSString, url to open if 'ok' was pressed
+NSString*  const  iSmartNewsMessageStartDateKey = @"iSmartNewsMessageStartDateKey";     //  NSDate
+NSString*  const  iSmartNewsMessageEndDateKey   = @"iSmartNewsMessageEndDateKey";       //  NSDate
+NSString*  const  iSmartNewsMessageRepeatKey    = @"iSmartNewsMessageRepeatKey";        //  NSNumber (as bool)
+NSString*  const  iSmartNewsMessageAlwaysKey    = @"iSmartNewsMessageAlwaysKey";        //  NSNumber (as bool)
+NSString*  const  iSmartNewsMessageCounterKey   = @"iSmartNewsMessageCounterKey";       //  NSNumber
+NSString*  const  iSmartNewsMessageQueueKey     = @"iSmartNewsMessageQueueKey";         //  NSString, name of queue
+
+NSString*  const iSmartNewsMessageTypeKey       = @"iSmartNewsMessageTypeKey";          //  NSString, type of message. "web" for web content
+NSString*  const iSmartNewsContentTypeWeb       = @"web";
+
+@implementation iSmartNews
+{
+    iSmartNewsUpdater* _updater;
     
-    UIBackgroundTaskIdentifier _updateBgTaskId;
+    //UIBackgroundTaskIdentifier _updateBgTaskId;
+    //NSURLConnection*        connection_;
+    
+    iSmartNewsDisplayList* _mainDisplayList;
     
     NSData* _currentNews;
-    
-    iSmartNewsVisualizer* _visualizer;
-    
+
     NSMutableDictionary* _settings;
-    
-    /*! @cond SkipThis  */
-    
-    /*! @internal */
-    NSURLConnection*        connection_;
-    
-    /*! @internal */
-    NSMutableArray*         loadedNews_;
-    
-    /*! @internal */
-    /*! @since Version 1.3 */
-    NSUInteger              gate_;
-    
-    /*! @endcond  */
-    
-    NSString* currentQueue_;
-    NSMutableDictionary* queuesInfo_;
-    NSMutableDictionary* queuesTimeouts_;
-    NSTimer* queueTimer_;
-    NSTimer* retryTimer_;
-    BOOL isFirst_;
-    
+
     void (^_removeAdsActionBlock)();
     
     BOOL _advIsOnScreen;
     NSTimer* _advIsOnScreenWatchDogTimer;
+    
+    NSMutableSet*        _embeddedPanelsEvents;
+    NSMutableDictionary* _embeddedPanels;
+    
+    BOOL _dispatchForceUpdateIfEmpty;
+    
+    BOOL _integratedWithEventCenter;
 }
 
 static NSMutableDictionary* services = nil;
+
+#pragma mark - Init
+/*! @brief Contructor */
+- (id)initWithServiceName:(NSString*)serviceName
+{
+    self = [super init];
+    
+    if ( self )
+    {
+        [iSmartNewsActions sharedInstance];
+        
+        _service = [serviceName copy];
+        
+        //Config insance
+        
+        if ([_service isEqualToString:@"news"])
+        {
+            _integratedWithEventCenter = YES;
+        }
+        else if ([_service isEqualToString:@"customadv"])
+        {
+            _dispatchForceUpdateIfEmpty = YES;
+        }
+        
+        __weak iSmartNews* wSelf = self;
+        
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(advWillShow) name:@"iSmartAdvertisingWillShowFullscreenBannerNotification" object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(advDidHide)  name:@"iSmartAdvertisingDidHideFullscreenBannerNotification" object:nil];
+        
+        _embeddedPanelsEvents = [NSMutableSet new];
+        _embeddedPanels       = [NSMutableDictionary new];
+        
+        if (_integratedWithEventCenter)
+        {
+            [[iSmartEventsCenter sharedCenter] registerService:self.service
+                                                      callback:^(NSString* event, iSmartEventsCenterCallbackCompletion completion){
+                                                          
+                                                          if ([event isEqualToString:iSmartEventsCenterAppActivateEvent]){
+                                                              if (!UIApplicationWillResignActiveNotificationDone){
+                                                                  completion(iSmartEventsCenterCallbackContinue,nil);
+                                                                  return;
+                                                              }
+                                                          }
+                                                          
+                                                          if (_advIsOnScreen){
+                                                              completion(iSmartEventsCenterCallbackContinue,nil);
+                                                              return;
+                                                          }
+                                                          
+                                                          iSmartNews* this = wSelf;
+                                                          
+                                                          NSArray* applicableEvents = [this fetchEventsWithNames:@[event] applyPattern:NO];
+                                        
+                                                          if (([applicableEvents count] == 0) && [event isEqualToString:iSmartEventsCenterAppActivateEvent])
+                                                          {
+                                                              if (!this.eventsCenterCompletion)
+                                                              {
+                                                                  this.eventsCenterCompletion = completion;
+                                                                  [this showForActiveEvents:@[]];
+                                                              }
+                                                              else
+                                                              {
+                                                                  completion(iSmartEventsCenterCallbackContinue,nil);
+                                                              }
+                                                              return;
+                                                          }
+                                                          
+                                                          NSArray* activeEvents = [this fetchEventsWithNames:@[event] applyPattern:YES];
+                                                          
+                                                          if ([activeEvents count] == 0)
+                                                          {
+                                                              completion(iSmartEventsCenterCallbackContinue,nil);
+                                                              return;
+                                                          }
+                                                          
+                                                          if (!this.eventsCenterCompletion)
+                                                          {
+                                                              this.eventsCenterCompletion = completion;
+                                                              [this showForActiveEvents:activeEvents];
+                                                          }
+                                                          else
+                                                          {
+                                                              completion(iSmartEventsCenterCallbackContinue,nil);
+                                                          }
+                                                      }
+                                                     forEvents:nil
+                                                  withPriority:1000];
+        }
+        
+        [self settings];// load
+        
+        if (![[[self settings] objectForKey:@"launchDate"] isKindOfClass:[NSDate class]]){
+            [[self settings] setObject:[NSDate ism_date] forKey:@"launchDate"];
+            [self save];
+        }
+        
+        [[iSmartNewsQueuesInfo queuesInfoForService:[self service]] loadQueuesInfo];
+        //[self loadQueuesInfo];
+        _mainDisplayList = [iSmartNewsDisplayList new];
+        
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(UIWindowDidBecomeKeyNotification) name:UIWindowDidBecomeKeyNotification object:nil];
+        
+        if (!services)
+        {
+            services = [NSMutableDictionary new];
+        }
+        [services setObject:self forKey:serviceName];
+    }
+    
+    return self;
+}
+
++ (iSmartNews*)newsForService:(NSString*)name
+{
+    return [services objectForKey:name];
+}
 
 + (iSmartNews*)sharedNews
 {
@@ -282,9 +418,122 @@ static NSMutableDictionary* services = nil;
     static iSmartNews* inst;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
+        
         inst = [(iSmartNews*)[self alloc] initWithServiceName:@"customadv"];
     });
     return inst;
+}
+
+-(NSArray*) fetchEventsWithNames:(NSArray*) names applyPattern:(BOOL) applyPattern
+{
+    NSManagedObjectContext* context = managedObjectContext([self service]);
+    
+    NSEntityDescription* entity = [NSEntityDescription entityForName:@"SmartNewsEvent" inManagedObjectContext:context];
+    
+    NSFetchRequest* fetchAllRequest = [[NSFetchRequest alloc] init];
+    [fetchAllRequest setEntity:entity];
+    [fetchAllRequest setPredicate:[NSPredicate predicateWithValue:YES]];
+
+    NSArray* allEvents = [context executeFetchRequest:fetchAllRequest error:NULL];
+    
+    if ([allEvents count] == 0)
+    {
+        return nil;
+    }
+    
+    NSFetchRequest* fetchRequest = [[NSFetchRequest alloc] init];
+    [fetchRequest setEntity:entity];
+    
+    if ([names count] > 1)
+    {
+        NSMutableArray* subpredicates = [NSMutableArray new];
+        for (NSString* name in names)
+        {
+            NSPredicate* subpredicate = [NSPredicate predicateWithFormat:@"name ==[c] %@", name];
+            [subpredicates addObject:subpredicate];
+        }
+        NSPredicate* finalPredicate = [NSCompoundPredicate orPredicateWithSubpredicates:subpredicates];
+        
+        [fetchRequest setPredicate:finalPredicate];
+    }
+    else
+    {
+        [fetchRequest setPredicate:[NSPredicate predicateWithFormat:@"name ==[c] %@", [names firstObject]]];
+    }
+    
+    NSError* error = nil;
+    NSMutableArray* matchedEvents = [[context executeFetchRequest:fetchRequest error:&error] mutableCopy];
+    if (!matchedEvents || [matchedEvents count] == 0)
+    {
+        return nil;
+    }
+    
+    NSMutableArray* activeEvents = [NSMutableArray new];
+    
+    if (applyPattern)
+    {
+        for (SmartNewsEvent* eventObj in matchedEvents)
+        {
+            NSString* stateType;
+            do
+            {
+                NSString* currentPattern = [eventObj currentPattern];
+                if (!currentPattern || [currentPattern isEqualToString:@""])
+                {
+                    [eventObj setCurrentPattern:[eventObj initialPattern]];
+                    currentPattern = [eventObj initialPattern];
+                }
+                
+                NSMutableArray* parts = [[currentPattern componentsSeparatedByString:@"|"] mutableCopy];
+                
+                do
+                {
+                    NSString* currentPart = [parts firstObject];
+                    NSArray* state = [currentPart componentsSeparatedByString:@"="];
+                    stateType = [state firstObject];
+                    NSInteger stateCounter = [[state lastObject] integerValue];
+                    if (stateCounter == 0)
+                    {
+                        [parts removeObjectAtIndex:0];
+                        
+                        if ([parts count] == 0)
+                        {
+                            break;
+                        }
+                        
+                        continue;
+                    }
+                    
+                    [parts replaceObjectAtIndex:0 withObject:[NSString stringWithFormat:@"%@=%d",stateType,(int)(stateCounter - 1)]];
+                    break;
+                    
+                } while (YES);
+                
+                if ([parts count] == 0)
+                {
+                    [eventObj setCurrentPattern:[eventObj initialPattern]];
+                    continue;
+                }
+                
+                [eventObj setCurrentPattern:[parts componentsJoinedByString:@"|"]];
+                break;
+            }
+            while (YES);
+            
+            if ([stateType isEqualToString:@"on"])
+            {
+                [activeEvents addObject:eventObj];
+            }
+        }
+    }
+    else
+    {
+        [activeEvents addObjectsFromArray:matchedEvents];
+    }
+    
+    saveContext(self.service);
+    
+    return activeEvents;
 }
 
 - (void)resetLoadedDataBuffer
@@ -327,7 +576,7 @@ static NSMutableDictionary* services = nil;
     [[self settings] removeAllObjects];
     [self save];
     
-    [[g_sn_eventShownNews objectForKey:self.service] removeAllObjects];
+    sn_evenShownNewsClearForService(self.service);
     
     clearNewsLang();
     
@@ -347,41 +596,35 @@ static NSMutableDictionary* services = nil;
 
 - (void)updateUpgradeInfo
 {
-    detectUpgrade(YES);
+    sn_detectUpgrade(YES);
 }
 
-- (NSMutableDictionary*)settings
+
+- (void)UIWindowDidBecomeKeyNotification
 {
-    if (!_settings)
-    {
-        _settings = [[NSMutableDictionary alloc] initWithContentsOfFile:[self settingsPath]];
-        if (!_settings)
-            _settings = [[NSMutableDictionary alloc] init];
-        
-        iSmartNewsLog(@"_settings: %@",_settings);
-    }
-    
-    return _settings;
 }
 
-+ (void)setCanIShowAlertViewRightNowHandler:(CanIShowAlertViewRightNowHandler)CanIShowAlertViewRightNow
+/*! @brief Destructor */
+- (void)dealloc
+{
+    [self save];
+    
+    [_updater cancel];
+    _updater.delegate = nil;
+    
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+
+#pragma mark - Intergation
++ (void)setCanIShowAlertViewRightNowHandler:(iSmartNewsAllowBlock)CanIShowAlertViewRightNow
 {
     gCanIShowAlertViewRightNow = [CanIShowAlertViewRightNow copy];
 }
 
-- (void)resetRunCounter
++ (void)setAllowFetchHandler:(iSmartNewsAllowBlock)fetchHandler
 {
-    [[self settings] setObject:[NSNumber numberWithUnsignedLongLong:0] forKey:@"counter"];
-    [self save];
-}
-
-- (void)save
-{
-    if (_settings)
-    {
-        [_settings writeToFile:[self settingsPath] atomically:YES];
-        iSmartNewsLog(@"_settings saved");
-    }
+    g_fetchHandler = [fetchHandler copy];
 }
 
 - (void)advWillShow
@@ -398,288 +641,277 @@ static NSMutableDictionary* services = nil;
     _advIsOnScreen = NO;
 }
 
-/*! @brief Contructor */
-- (id)initWithServiceName:(NSString*)serviceName
-{
-	self = [super init];
-
-	if ( self )
-	{
-        _service = [serviceName copy];
-        
-        __weak iSmartNews* wSelf = self;
-        
-        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(advWillShow) name:@"iSmartAdvertisingWillShowFullscreenBannerNotification" object:nil];
-        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(advDidHide) name:@"iSmartAdvertisingDidHideFullscreenBannerNotification" object:nil];
-        
-        [[iSmartEventsCenter sharedCenter] registerService:self.service
-                                                  callback:^(NSString* event, iSmartEventsCenterCallbackCompletion completion){
-                                                      
-                                                      if ([event isEqualToString:iSmartEventsCenterAppActivateEvent]){
-                                                          if (!UIApplicationWillResignActiveNotificationDone){
-                                                              completion(iSmartEventsCenterCallbackContinue,nil);
-                                                              return;
-                                                          }
-                                                      }
-                                                      
-                                                      if (_advIsOnScreen){
-                                                          completion(iSmartEventsCenterCallbackContinue,nil);
-                                                          return;
-                                                      }
-                                                      
-                                                      iSmartNews* this = wSelf;
-                                                      
-                                                      NSManagedObjectContext* context = managedObjectContext(this.service);
-                                                      
-                                                      NSEntityDescription *entity = [NSEntityDescription entityForName:@"SmartNewsEvent" inManagedObjectContext:context];
-                                                      
-                                                      NSFetchRequest *fetchAllRequest = [[NSFetchRequest alloc] init];
-                                                      [fetchAllRequest setEntity:entity];
-                                                      [fetchAllRequest setPredicate:[NSPredicate predicateWithValue:YES]];
-                                                      
-                                                      //
-                                                      if (([[context executeFetchRequest:fetchAllRequest error:NULL] count] == 0)
-                                                          && [event isEqualToString:iSmartEventsCenterAppActivateEvent])
-                                                      {
-                                                          if (!this.eventsCenterCompletion)
-                                                          {
-                                                              this.eventsCenterCompletion = completion;
-                                                              [this showForActiveEvents:@[]];
-                                                          }
-                                                          else
-                                                          {
-                                                              completion(iSmartEventsCenterCallbackContinue,nil);
-                                                          }
-                                                          return;
-                                                      }
-                                                      
-                                                      
-                                                      NSFetchRequest *fetchRequest = [[NSFetchRequest alloc] init];
-                                                      [fetchRequest setEntity:entity];
-                                                      [fetchRequest setPredicate:[NSPredicate predicateWithFormat:@"name = %@",event]];
-                                                      
-                                                      NSError* error = nil;
-                                                      NSMutableArray* matches = [[context executeFetchRequest:fetchRequest error:&error] mutableCopy];
-                                                      if (!matches || [matches count] == 0)
-                                                      {
-                                                          completion(iSmartEventsCenterCallbackContinue,nil);
-                                                          return;
-                                                      }
-                                                      
-                                                      NSMutableArray* activeEvents = [NSMutableArray new];
-                                                      
-                                                      for (SmartNewsEvent* eventObj in matches)
-                                                      {
-                                                          NSString* stateType;
-                                                          
-                                                          do
-                                                          {
-                                                              NSString* currentPattern = [eventObj currentPattern];
-                                                              if (!currentPattern || [currentPattern isEqualToString:@""])
-                                                              {
-                                                                  [eventObj setCurrentPattern:[eventObj initialPattern]];
-                                                                  currentPattern = [eventObj initialPattern];
-                                                              }
-                                                              
-                                                              NSMutableArray* parts = [[currentPattern componentsSeparatedByString:@"|"] mutableCopy];
-                                                              
-                                                              do {
-                                                                  NSString* currentPart = [parts firstObject];
-                                                                  NSArray* state = [currentPart componentsSeparatedByString:@"="];
-                                                                  stateType = [state firstObject];
-                                                                  NSInteger stateCounter = [[state lastObject] integerValue];
-                                                                  if (stateCounter == 0)
-                                                                  {
-                                                                      [parts removeObjectAtIndex:0];
-                                                                      
-                                                                      if ([parts count] == 0)
-                                                                      {
-                                                                          break;
-                                                                      }
-                                                                      
-                                                                      continue;
-                                                                  }
-                                                                  
-                                                                  [parts replaceObjectAtIndex:0 withObject:[NSString stringWithFormat:@"%@=%d",stateType,(int)(stateCounter - 1)]];
-                                                                  break;
-                                                                  
-                                                              } while (YES);
-                                                              
-                                                              if ([parts count] == 0)
-                                                              {
-                                                                  [eventObj setCurrentPattern:[eventObj initialPattern]];
-                                                                  continue;
-                                                              }
-                                                              
-                                                              [eventObj setCurrentPattern:[parts componentsJoinedByString:@"|"]];
-                                                              break;
-                                                          }
-                                                          while (YES);
-                                                          
-                                                          if ([stateType isEqualToString:@"on"])
-                                                          {
-                                                              [activeEvents addObject:eventObj];
-                                                          }
-                                                      }
-                                                      
-                                                      saveContext(this.service);
-                                                      
-                                                      if ([activeEvents count] == 0)
-                                                      {
-                                                          completion(iSmartEventsCenterCallbackContinue,nil);
-                                                          return;
-                                                      }
-
-                                                      if (!this.eventsCenterCompletion)
-                                                      {
-                                                          this.eventsCenterCompletion = completion;
-                                                          [this showForActiveEvents:activeEvents];
-                                                      }
-                                                      else
-                                                      {
-                                                          completion(iSmartEventsCenterCallbackContinue,nil);
-                                                      }
-                                                  }
-                                                 forEvents:nil
-                                              withPriority:1000];
-        
-        [self settings];// load
-        
-        if (![[[self settings] objectForKey:@"launchDate"] isKindOfClass:[NSDate class]]){
-            [[self settings] setObject:[NSDate ism_date] forKey:@"launchDate"];
-            [self save];
-        }
-        
-        queuesTimeouts_ = [NSMutableDictionary new];
-        [self loadQueuesInfo];
-        
-        gate_ = UINT_MAX;
-        loadedNews_ = [[NSMutableArray alloc] init];
-        
-        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(UIWindowDidBecomeKeyNotification) name:UIWindowDidBecomeKeyNotification object:nil];
-        
-        if (!services){
-            services = [NSMutableDictionary new];
-        }
-        [services setObject:self forKey:serviceName];
-	}
-
-	return self;
+- (void)setRemoveAdsActionBlock:(void(^)())block{
+    _removeAdsActionBlock = [block copy];
 }
 
-+ (iSmartNews*)newsForService:(NSString*)name
-{
-    return [services objectForKey:name];
++ (NSString*)versionString{
+    return iSmartNewsVersion;
 }
 
-- (void)UIWindowDidBecomeKeyNotification
+- (void)markReviewAsShown
 {
+    NSManagedObjectContext* context = managedObjectContext(self.service);
+    NSFetchRequest *fetchReq = [[NSFetchRequest alloc] init];
+    [fetchReq setEntity:[NSEntityDescription entityForName:@"SmartNewsItem" inManagedObjectContext:context]];
+    [fetchReq setPredicate:[NSPredicate predicateWithFormat:@"uuid == %@",@"review"]];
+    NSArray* news = [context executeFetchRequest:fetchReq error:NULL];
+    if ([news count] > 0) {
+        SmartNewsItem* item = [news firstObject];
+        [self saveLastShown:item.uuid condition:@"review"];
+    }
 }
 
-/*! @brief Destructor */
-- (void)dealloc
-{   
-    [self save];
-    [connection_ cancel];
-    
-    [[NSNotificationCenter defaultCenter] removeObserver:self];
+- (void)openReview
+{
+    [self sendSpecialEventForShowReviewItem];
+}
+
+- (void)sendSpecialEventForShowReviewItem
+{
+    if (_integratedWithEventCenter)
+    {
+        [[iSmartEventsCenter sharedCenter] postEvent:@"review:show_review_manually"];
+    }
+#if DEBUG || ADHOC
+    else
+    {
+        assert(0 && "Use SharedNews instance");
+    }
+#endif
+}
+
+- (void)openReviewUrl
+{
+    [self openReviewWithType:nil];
+}
+
+- (void)openReviewWithType:(NSString*) type
+{
+    NSDictionary* additionalInfo = ([type length] > 0) ? @{@"reviewType" : type} : nil;
+    [[iSmartNewsActions sharedInstance] performAction:iSmartNewsActionReviewOpen item:nil additionalInfo:additionalInfo completionHandler:nil];
+}
+
+-(void)setITunesId:(NSString *)iTunesId
+{
+    _iTunesId = iTunesId;
+    [[iSmartNewsActions sharedInstance] setITunesId:iTunesId];
 }
 
 #pragma mark -
-#pragma mark Cache
+#pragma mark Embedded
 
-- (NSString*)settingsPath
+-(UIView<iSmartNewsPanelProtocol>*) getEmbeddedPanelForEvents:(NSArray*) events error:(NSError**) error
 {
-    if ([self.service isEqualToString:@"news"]){
-        return [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES)
-                 objectAtIndex:0]
-                stringByAppendingPathComponent:@"iSmartNewsCacheSettings.plist"];
-    }
-    else {
-        return [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES)
-                 objectAtIndex:0]
-                stringByAppendingPathComponent:[@"iSmartNewsCacheSettings" stringByAppendingFormat:@"_%@.plist",self.service]];
-    }
-}
-
-- (NSString*)cachePath
-{
-    if ([self.service isEqualToString:@"news"]){
-        return [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES)
-                 objectAtIndex:0]
-                        stringByAppendingPathComponent:@"iSmartNewsCache.txt"];
-    }
-    else {
-        return [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES)
-                 objectAtIndex:0]
-                stringByAppendingPathComponent:[@"iSmartNewsCache" stringByAppendingFormat:@"_%@.txt",self.service]];
-    }
-}
-
-- (void)clearCache
-{
-    iSmartNewsMainThread;
+    NSSet* eventsSet = [NSSet setWithArray:events];
     
-    [[NSFileManager defaultManager] removeItemAtPath:[self cachePath] error:NULL];
+    if ([_embeddedPanelsEvents intersectsSet:eventsSet])
+    {
+        NSLog(@"Events are used");
+        return nil;
+    }
     
-    iSmartNewsLog(@"clearCache");        
+    [_embeddedPanelsEvents addObjectsFromArray:events];
+    
+    iSmartNewsEmbeddedPanel* panel = [[iSmartNewsEmbeddedPanel alloc] initWithFrame:CGRectMake(0, 0, 320, 290)];
+    [self refreshAssignedPanel:panel];
+    
+    [panel assignUUID:[[NSUUID new] UUIDString]];
+    [_embeddedPanels setObject:panel forKey:[panel uuid]];
+    
+    [panel startRotationWithEvents:events];
+    
+    return panel;
 }
 
-- (void)setCacheValue:(NSDictionary*)_value
+-(BOOL) kickEmbeddedPanelWithUUID:(NSString*) uuid
 {
-    if ([_value objectForKey:@"skipCache"])
+    iSmartNewsEmbeddedPanel* panel = [_embeddedPanels objectForKey:uuid];
+    
+    if (panel)
+    {
+        [panel setActive:NO];
+        
+        for (NSString* event in [panel rotationEvents])
+        {
+            [_embeddedPanelsEvents removeObject:event];
+        }
+        
+        [_embeddedPanels removeObjectForKey:uuid];
+        [panel removeFromSuperview];
+        panel = nil;
+        
+        return YES;
+    }
+    
+    return NO;
+}
+
+-(void)refreshAssignedPanel:(iSmartNewsEmbeddedPanel *)panel
+{
+    panel.internalDelegate = self;
+    panel.iTunesId = self.iTunesId;
+    panel.service = self.service;
+}
+
+-(void)panelDidCompleteShown:(iSmartNewsEmbeddedPanel *)panel
+{
+    [self loadForEmbededPanel:panel];
+}
+
+#pragma mark -
+#pragma mark DisplayList
+
+-(void)displayListWasEnded:(iSmartNewsDisplayList *)displayList
+{
+    if (displayList == _mainDisplayList)
+    {
+        [self completeEvent];
+    }
+}
+
+-(BOOL)displayListCanShowAlertView:(iSmartNewsDisplayList *)displayList
+{
+    if (gCanIShowAlertViewRightNow)
+    {
+        return gCanIShowAlertViewRightNow(self);
+    }
+    else
+    {
+        return YES;
+    }
+}
+
+-(UInt64)displayListGetCounterValue:(iSmartNewsDisplayList *)displayList
+{
+    assert(_mainDisplayList == displayList);
+    
+    UInt64 counter = [[[self settings] objectForKey:@"counter"] unsignedLongLongValue];
+    
+    return counter;
+}
+
+-(iSmartNewsSaveLastShowResult) displayList:(iSmartNewsDisplayList*) displayList markItemIsShown:(NSDictionary*) item info:(NSDictionary*) info
+{
+    NSString* uuid = [item objectForKey:@"uuid"];
+    BOOL isMessage = [[info objectForKey:@"isMessage"] boolValue];
+    
+    NSString* condition = [info objectForKey:@"condition"];
+
+    //Meta item
+    if (([uuid length] > 0) && (isMessage == NO))
+    {
+        return [self saveLastShown:uuid condition:condition];
+    }
+    else
+    {
+        [self setCacheValue:item];
+        return iSmartNewsLastShowSavedSuccessfully;
+    }
+}
+
+-(void)displayListWasAssignedNewMessages:(iSmartNewsDisplayList *)displayList
+{
+    
+}
+
+#pragma mark Actions
+-(void)displayList:(iSmartNewsDisplayList *)displayList performAction:(iSmartNewsDisplayAction)action item:(NSObject *)item
+{
+    switch (action)
+    {
+        case iSmartNewsDisplayActionRemoveAdsBasic:
+        {
+            if ([item isKindOfClass:[NSDictionary class]])
+            {
+                NSString* removeAdsAction = [(NSDictionary*)item objectForKey:@"removeAdsAction"];
+                
+                if ([removeAdsAction rangeOfString:@"${URL}"].location != NSNotFound)
+                {
+                    NSURL* visualizerURL = [[displayList visualizer] url];
+                    if (visualizerURL)
+                    {
+                        NSCharacterSet *chars = NSCharacterSet.URLQueryAllowedCharacterSet;
+                        NSString* encodedString = [[visualizerURL absoluteString] stringByAddingPercentEncodingWithAllowedCharacters:chars];
+                        removeAdsAction = [removeAdsAction stringByReplacingOccurrencesOfString:@"${URL}" withString:encodedString];
+                    }
+                    else
+                    {
+                        removeAdsAction = [removeAdsAction stringByReplacingOccurrencesOfString:@"${URL}" withString:@"alert"];
+                    }
+                }
+                
+                NSURL* removeAdsUrl = [NSURL URLWithString:removeAdsAction];
+                
+                if (removeAdsUrl && [[UIApplication sharedApplication] canOpenURL:removeAdsUrl])
+                {
+                    [[UIApplication sharedApplication] beginIgnoringInteractionEvents];
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                        [[UIApplication sharedApplication] openURL:removeAdsUrl];
+                        [[UIApplication sharedApplication] endIgnoringInteractionEvents];
+                    });
+                }
+            }
+        }
+        break;
+            
+        case iSmartNewsDisplayActionRemoveAdsApplication:
+        {
+            if (_removeAdsActionBlock)
+            {
+                void (^removeAdsActionBlock)() = [_removeAdsActionBlock copy];
+                
+                [[UIApplication sharedApplication] beginIgnoringInteractionEvents];
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    removeAdsActionBlock();
+                    [[UIApplication sharedApplication] endIgnoringInteractionEvents];
+                });
+            }
+        }
+        break;
+            
+        default:
+            break;
+    }
+}
+
+#pragma mark -
+#pragma mark - Start Show
+- (void)loadForEmbededPanel:(iSmartNewsEmbeddedPanel*)panel
+{
+    [self refreshAssignedPanel:panel];
+    
+    NSArray* activeEventNames = nil;
+    
+    NSString* activeEvent = [panel currentEvent];
+    if (activeEvent != nil)
+    {
+        activeEventNames = @[activeEvent];
+    }
+    
+    if ([activeEventNames count] == 0)
         return;
     
-    FILE* file = fopen([[self cachePath] UTF8String], "a");
-    if (file)
+    NSArray* events = [self fetchEventsWithNames:activeEventNames applyPattern:YES];
+    
+    if (events == nil)
     {
-        const char* v = [news_md5ForDictionary(_value) UTF8String];
-        fwrite(v, strlen(v), 1, file);
-        fwrite("\n", 1, 1, file);
-        fflush(file);
-        fclose(file);
-        iSmartNewsLog(@"setCacheValue:%@ -> %s",_value,v);
+        [panel setIsReady:NO];
+        
+        if (_dispatchForceUpdateIfEmpty)
+        {
+            [self forceUpdate];
+        }
+    }
+    else
+    {
+        [self parse:_currentNews events:events forDisplayList:[panel displayList]];
     }
 }
 
-- (BOOL)checkIfMessageWasAlreadyShown:(NSDictionary*)_message
+- (void)showForActiveEvents:(NSArray*)events
 {
-    if ([_message objectForKey:@"skipCache"])
-        return NO;
-    
-    FILE* cache = fopen([[self cachePath] UTF8String], "r");
-    if (!cache)
-        return NO;
-    
-    rewind(cache);
-
-    const char* key = [news_md5ForDictionary(_message) UTF8String];
-    BOOL retVal = NO;
-    
-    while(!retVal)
-    {
-        char buf[129];
-        memset(buf,0,sizeof(buf));
-        if (!fgets(buf, sizeof(buf)-1, cache))
-            break;
-        
-        size_t bytesRead = strlen(buf);
-        
-        for (; bytesRead && (buf[bytesRead-1]=='\n' || buf[bytesRead-1]=='\r'); --bytesRead )
-            buf[bytesRead-1]=0;
-        
-        if (bytesRead != CC_MD5_DIGEST_LENGTH * 2)
-            continue;
-        
-        if (!memcmp(key, buf, CC_MD5_DIGEST_LENGTH * 2))
-            retVal = YES;
-    }
-    
-    fclose(cache);
-    
-    iSmartNewsLog(@"checkIfMessageWasAlreadyShown:%@ -> %d",_message,retVal);
-    
-    return retVal;
+    [self parse:_currentNews events:events];
 }
 
 #pragma mark -
@@ -687,7 +919,7 @@ static NSMutableDictionary* services = nil;
 
 - (BOOL)pumpUrls:(BOOL)emulateAppActivate
 {
-    assert(!connection_);
+    assert(![_updater isActive]);
     assert([NSThread isMainThread]);
     
     NSString* urlString = [_url absoluteString];
@@ -702,29 +934,32 @@ static NSMutableDictionary* services = nil;
     
     NSURLRequest* request = [NSURLRequest requestWithURL:url
                                              cachePolicy:NSURLRequestReloadIgnoringCacheData // NO CACHE!!!
-                                         timeoutInterval:7];
+                                         timeoutInterval:10.0f];
     if (!request)
     {
         return NO;
     }
     
-    connection_ = [NSURLConnection connectionWithRequest:request delegate:self];
-
-    if (!connection_)
+    if (!_updater)
+    {
+        _updater = [[iSmartNewsUpdater alloc] init];
+    }
+    
+    _updater.delegate = self;
+    [_updater beginUpdateWithURLRequest:request userInfo:@{@"emulateAppActivate" : @(emulateAppActivate)}];
+    
+    if ([_updater isActive] == NO)
     {
         return NO;
     }
-    
-    if (emulateAppActivate){
-        objc_setAssociatedObject(connection_, &emulateAppActivateKey, @(YES), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    
+
     return YES;
 }
 
 - (void)completeEvent
 {
-    if (self.eventsCenterCompletion){
+    if (_integratedWithEventCenter && self.eventsCenterCompletion)
+    {
         iSmartEventsCenterCallbackCompletion cb = self.eventsCenterCompletion;
         self.eventsCenterCompletion = nil;
         
@@ -740,86 +975,30 @@ static NSMutableDictionary* services = nil;
     }
 }
 
-- (void)_update:(BOOL)emulateAppActivate
+- (void)_updateWithEmuAppActivate:(BOOL)emulateAppActivate
 {
     iSmartNewsMainThread;
     
-    Class iSmartBarrierClass = NSClassFromString(@"iSmartBarrier");
-    if (iSmartBarrierClass)
+    if (!sn_allowUpdate())
     {
-        SEL sharedBarrierSel = NSSelectorFromString(@"sharedBarrier");
-        id (*sharedBarrierFunc) (id self, SEL _cmd) = (id (*) (id self, SEL _cmd))objc_msgSend;
-        id sharedBarrier = sharedBarrierFunc(iSmartBarrierClass,sharedBarrierSel);
-        if (sharedBarrier)
-        {
-            SEL allowedSel = NSSelectorFromString(@"allowed");
-            if ([sharedBarrier respondsToSelector:allowedSel])
-            {
-                BOOL (*allowedFunc) (id self, SEL _cmd) = (BOOL (*) (id self, SEL _cmd))objc_msgSend;
-                if (!allowedFunc(sharedBarrier,allowedSel))
-                {
-                    return;
-                }
-            }
-        }
+        return;
+    }
+    
+    if (g_fetchHandler && !g_fetchHandler(self)){
+        return;
     }
     
     iSmartNewsLog(@"Update called");
     
-    if ( connection_ )
+    if ([_updater isActive])
     {
-        [connection_ cancel];
-        connection_ = nil;
+        [_updater cancel];
         
         iSmartNewsLog(@"Previous connection canceled");
     }
     
-    if ([self pumpUrls:emulateAppActivate] && ([[UIApplication sharedApplication] applicationState] != UIApplicationStateActive))
-    {
-        if (_updateBgTaskId == UIBackgroundTaskInvalid)
-        {
-            _updateBgTaskId = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
-                [[UIApplication sharedApplication] endBackgroundTask:_updateBgTaskId];
-                _updateBgTaskId = UIBackgroundTaskInvalid;
-                [connection_ cancel];
-                connection_ = nil;
-            }];
-        }
-    }
+    [self pumpUrls:emulateAppActivate];
 }
-
-- (void)resetVisualizerVar
-{
-    _visualizer.delegate = nil;
-    
-    // WE delay destruction of visualizer to prevent will/hide notification to be sent for each news item.
-    // If delay is used then notifications will be sent only once per block.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [_visualizer description];//some fake call
-    });
-    
-    _visualizer = nil;
-}
-
-- (void)clearAndHideAlert
-{
-    [_visualizer forceHide];
-    [self resetVisualizerVar];
-    
-    [retryTimer_ invalidate];
-    retryTimer_ = nil;
-    
-    [queueTimer_ invalidate];
-    queueTimer_ = nil;
-    
-    currentQueue_ = nil;
-
-    [queuesTimeouts_ removeAllObjects];
-    [loadedNews_ removeAllObjects];
-    
-    [self completeEvent];
-}
-
 
 - (void)parseEvents:(NSData*)newData
 {
@@ -832,35 +1011,26 @@ static NSMutableDictionary* services = nil;
     }
     
     NSArray* origNews = [self newsFromData:newData];
-    
+        
     if ([origNews isKindOfClass:[NSArray class]])
     {
         NSMutableSet* loadedMeta = [NSMutableSet new];
-        preprocessMeta(self.service, origNews,loadedMeta);
+     
+        sn_preprocessMeta(self.service, origNews,loadedMeta);
+        
         preprocessEvents(self.service, origNews);
+        [[iSmartNewsSegment sharedSegment] preprocess:origNews];
     }
-}
-
-- (NSDate*)launchDate
-{
-    NSDate*  launchDate = [[self settings] objectForKey:@"launchDate"];
-    if (![launchDate isKindOfClass:[NSDate class]]){
-        [[self settings] setObject:[NSDate ism_date] forKey:@"launchDate"];
-        [self save];
-        launchDate = [[self settings] objectForKey:@"launchDate"];
-    }
-    return launchDate;
-}
-
-- (void)resetLaunchDate
-{
-    [[self settings] setObject:[NSDate ism_date] forKey:@"launchDate"];
-    [self save];
 }
 
 - (NSArray*)newsFromData:(NSData*)data
 {
-    NSString* tmpFile = [NSTemporaryDirectory() stringByAppendingPathComponent:[@"iSmartNewsTempFile" stringByAppendingFormat:@"_%@.tmp",[self service]]];
+    NSString* _ism_tmpf = [NSString stringWithFormat:@"%@%@", _str_i_smrt_news(), @"TempFile"];
+#if DEBUG
+    assert([@"iSmartNewsTempFile" isEqualToString:_ism_tmpf]);
+#endif
+    
+    NSString* tmpFile = [NSTemporaryDirectory() stringByAppendingPathComponent:[_ism_tmpf stringByAppendingFormat:@"_%@.tmp",[self service]]];
     [[NSFileManager defaultManager] removeItemAtPath:tmpFile error:0];
     [data writeToFile:tmpFile atomically:YES];
     NSArray* origNews = [[NSArray alloc] initWithContentsOfFile:tmpFile];
@@ -878,30 +1048,32 @@ static NSMutableDictionary* services = nil;
 
 - (void)parse:(NSData*)newData events:(NSArray*)events
 {
+    _mainDisplayList.delegate = self;
+    _mainDisplayList.service  = [self service];
+    
+    [self parse:newData events:events forDisplayList:_mainDisplayList];
+}
+
+- (void)parse:(NSData*)newData events:(NSArray*)events forDisplayList:(iSmartNewsDisplayList*) displayList
+{
     if (!newData){
         [self completeEvent];
         iSmartNewsLog(@"No data loaded");
+        
+        if (_dispatchForceUpdateIfEmpty)
+        {
+            [self forceUpdate];
+        }
         return;
     }
-    
-    [queuesTimeouts_ removeAllObjects];
-    
-    [retryTimer_ invalidate];
-    retryTimer_ = nil;
-    
-    [queueTimer_ invalidate];
-    queueTimer_ = nil;
-    
-    [loadedNews_ removeAllObjects];
-    gate_ = UINT_MAX;
-    
-    currentQueue_ = nil;
-    
-    isFirst_ = YES;
+
+    NSMutableArray*      n_loadedNews     = [NSMutableArray new];
+    NSMutableDictionary* n_queuesTimeouts = [NSMutableDictionary new];
+    NSNumber* n_gate = nil;
     
     NSMutableSet* loadedMeta = [NSMutableSet new];
     
-    cleanMessageKeysCache();
+    sn_cleanMessageKeysCache();
     
     NSDate*  launchDate = [self launchDate];
     
@@ -911,8 +1083,9 @@ static NSMutableDictionary* services = nil;
         
         if ([origNews isKindOfClass:[NSArray class]])
         {
-            NSArray* news = preprocessMeta(self.service, origNews,loadedMeta);
+            NSArray* news = sn_preprocessMeta(self.service, origNews,loadedMeta);
             preprocessEvents(self.service, origNews);
+            [[iSmartNewsSegment sharedSegment] preprocess:origNews];
             
             for (NSDictionary* _desc in news)
             {
@@ -947,7 +1120,7 @@ static NSMutableDictionary* services = nil;
                         // special section
                         NSNumber* gate = (NSNumber*)getMessageKey(desc,@"gate");
                         if ([gate isKindOfClass:[NSNumber class]])
-                            gate_ = [gate unsignedIntValue];
+                            n_gate = [NSNumber numberWithUnsignedInteger:[gate unsignedIntegerValue]];
                         
                         // -- since version 1.4
                         NSArray* queues = (NSArray*)getMessageKey(desc,@"queues");
@@ -979,7 +1152,7 @@ static NSMutableDictionary* services = nil;
                                         }
                                     }
                                     
-                                    [queuesTimeouts_ setObject:timeout forKey:name];
+                                    [n_queuesTimeouts setObject:timeout forKey:name];
                                 }
                             }
                         }
@@ -999,7 +1172,7 @@ static NSMutableDictionary* services = nil;
                             || ([[[UIDevice currentDevice] systemVersion] floatValue] >= 6.0)
                             || ![messageType isEqualToString:iSmartNewsContentTypeWeb])
                         {
-                            [loadedNews_ addObject:message];
+                            [n_loadedNews addObject:message];
                             iSmartNewsLog(@"Message parsed: %@",message);
                         }
                     }
@@ -1016,18 +1189,17 @@ static NSMutableDictionary* services = nil;
         }
     }
     
-    removeOldMeta(self.service, loadedMeta);
+    sn_removeOldMeta(self.service, loadedMeta);
     
     // -- since 2.0
-    NSArray* meta = metaNews(self.service, events);
+    NSArray* meta = sn_metaNews(self.service, events);
     if ([meta count] > 0){
-        [loadedNews_ addObjectsFromArray:meta];
+        [n_loadedNews addObjectsFromArray:meta];
     }
-    metaReset(self.service);
-    dumpMeta(self.service);
+    sn_metaReset(self.service);
     
     // -- since 1.4
-    [loadedNews_ sortUsingComparator:^NSComparisonResult(id o1, id o2){
+    [n_loadedNews sortUsingComparator:^NSComparisonResult(id o1, id o2){
         NSDictionary* m1 = o1;
         NSDictionary* m2 = o2;
         
@@ -1051,12 +1223,24 @@ static NSMutableDictionary* services = nil;
             return [q1 caseInsensitiveCompare:q2];
         }
     }];
-    iSmartNewsLog(@"NEW SORTED: %@",loadedNews_);
+    iSmartNewsLog(@"NEW SORTED: %@",n_loadedNews);
     // --
     
-    if ([loadedNews_ count])
+    if ([n_loadedNews count])
     {
-        [self showNextMessage];
+        NSMutableDictionary* enveronment = [NSMutableDictionary new];
+        if ([n_queuesTimeouts count] > 0)
+        {
+            [enveronment setObject:n_queuesTimeouts forKey:@"queuesTimeouts"];
+        }
+        
+        if (n_gate != nil)
+        {
+            [enveronment setObject:n_gate forKey:@"gate"];
+        }
+        
+        [displayList assignNews:n_loadedNews enveronment:enveronment];
+        [displayList showNextMessage];
     }
     else
     {
@@ -1065,413 +1249,12 @@ static NSMutableDictionary* services = nil;
     }
 }
 
-- (void)showNextMessage
+#pragma mark - Mark And Check Shown -
+#pragma mark Meta News
+- (iSmartNewsSaveLastShowResult)saveLastShown:(NSString*)uuid condition:(NSString*)condition
 {
-    if (_visualizer){
-        return;
-    }
+    iSmartNewsSaveLastShowResult result = iSmartNewsLastShowItemNotFound;
     
-    [retryTimer_ invalidate];
-    retryTimer_ = nil;
-    
-    [queueTimer_ invalidate];
-    queueTimer_ = nil;
-    
-    // counter logic, new since version 1.2
-    const UInt64 counter = [[[self settings] objectForKey:@"counter"] unsignedLongLongValue];
-    
-    NSDate* currentDate = [NSDate ism_date];
-    for (; 
-         [loadedNews_ count]; 
-         [loadedNews_ removeObjectAtIndex:0] 
-         )
-    {
-        NSDictionary* description = [loadedNews_ objectAtIndex:0];
-        
-        iSmartNewsLog(@"checking message: %@",description);            
-        
-        NSDate* from = [description objectForKey:iSmartNewsMessageStartDateKey];
-        if (from && [currentDate timeIntervalSinceDate:from] < 0){
-            iSmartNewsLog(@"start data not crossed, message will not be shown");            
-            continue;
-        }
-            
-        NSDate* to = [description objectForKey:iSmartNewsMessageEndDateKey];
-        if (to && [currentDate timeIntervalSinceDate:to] >= 0){
-            iSmartNewsLog(@"end date crossed, message will not be shown");
-            continue;        
-        }
-        
-        if (counter)
-        {
-            NSNumber* limitCounter = [description objectForKey:iSmartNewsMessageCounterKey];
-            if (limitCounter && ([limitCounter unsignedLongLongValue] > 0) && (counter < [limitCounter unsignedLongLongValue]))
-            {
-                iSmartNewsLog(@"counter limit not crossed, message will not be shown");
-                continue;        
-            }
-        }
-        
-        NSString* title = [description objectForKey:iSmartNewsMessageTitleKey];
-        NSString* message = [description objectForKey:iSmartNewsMessageTextKey];            
-        NSString* cancel = [description objectForKey:iSmartNewsMessageCancelKey];                        
-        NSString* ok = [description objectForKey:iSmartNewsMessageActionKey];
-        NSString* url = [description objectForKey:iSmartNewsMessageUrlKey];
-        NSString* review = [description objectForKey:iSmartNewsMessageReviewKey];
-        
-        if ([ok isEqualToString:@"default"]){
-            ok = NSLocalizedString(@"OK",);
-        }
-        
-        if ([review isEqualToString:@"default"]){
-            review = news_reviewRate();
-        }
-        
-        if (review){
-            
-            if ([title isEqualToString:@"default"]){
-                title = news_reviewTitle();
-            }
-            
-            if ([message isEqualToString:@"default"]){
-                message = news_reviewMessage();
-            }
-        }
-        
-        if ([cancel isEqualToString:@"default"]){
-            cancel = NSLocalizedString(@"Cancel",);
-        }
-        
-        NSString* remind = [description objectForKey:iSmartNewsMessageRemindKey];
-
-        if ([remind isEqualToString:@"default"]){
-            remind = news_reviewLater();
-        }
-        
-        NSString* queue = [description objectForKey:iSmartNewsMessageQueueKey];
-        if (queue)
-        {
-            if (!currentQueue_ || ![queue isEqualToString:currentQueue_])
-            {
-                currentQueue_ = [queue copy];
-
-                NSUInteger nQueued = 0;
-                
-                for (NSDictionary* m in loadedNews_)
-                {
-                    NSString* queue = [m objectForKey:iSmartNewsMessageQueueKey];
-                    if ([queue isEqualToString:currentQueue_])
-                        nQueued++;
-                }
-                
-                NSMutableDictionary* q = [queuesInfo_ objectForKey:@"indexes"];
-                if (!q || ![q isKindOfClass:[NSMutableDictionary class]])
-                {
-                    q = [NSMutableDictionary new];
-                    [queuesInfo_ setObject:q forKey:@"indexes"];
-                }
-                
-                NSNumber* n = [q objectForKey:queue];
-                if (!n)
-                {
-                    n = @(0);
-                    [q setObject:n forKey:queue];
-                }
-                
-                if ([n unsignedIntValue] >= nQueued)
-                {
-                    n = @(0);
-                    [q setObject:n forKey:queue];
-                }
-                
-                [loadedNews_ removeObjectsInRange:NSMakeRange(0, [n unsignedIntValue])];
-                [loadedNews_ removeObjectsInRange:NSMakeRange(1, nQueued - [n unsignedIntValue] - 1)];
-
-                n = @([n unsignedIntValue] + 1);
-                [q setObject:n forKey:queue];
-                
-                [self saveQueuesInfo];
-                
-                iSmartNewsLog(@"NEXT INDEX %@",n);
-                
-                NSNumber* timeout = [queuesTimeouts_ objectForKey:queue];
-                if (timeout)
-                {
-                    uint32_t t = [timeout unsignedIntValue];
-                    const uint32_t base = t & 0xFFFF;
-                    const uint32_t range = (t >> 16) & 0xFFFF;
-                    NSTimeInterval generatedTimeout = (NSTimeInterval)base;
-                    if (range != 0){
-                        generatedTimeout += (NSTimeInterval)arc4random_uniform(range);
-                    }
-                    queueTimer_ = [NSTimer scheduledTimerWithTimeInterval:(isFirst_
-                                                                           && ![description objectForKey:@"uuid"]
-                                                                           && [description objectForKey:iSmartNewsMessageTypeKey]
-                                                                           && [[description objectForKey:iSmartNewsMessageTypeKey] isEqualToString:iSmartNewsContentTypeWeb] ? 0.001 : generatedTimeout)
-                                                                   target:self
-                                                                 selector:@selector(showNextMessage)
-                                                                 userInfo:nil repeats:NO];
-                    return;
-                }
-            }
-        }
-
-        if (gCanIShowAlertViewRightNow && !gCanIShowAlertViewRightNow(self)){
-            retryTimer_ = [NSTimer scheduledTimerWithTimeInterval:1
-                                                           target:self
-                                                         selector:@selector(showNextMessage)
-                                                         userInfo:nil repeats:NO];
-            return;
-        }
-
-        isFirst_ = NO;
-        
-        NSString * messageType = [description objectForKey:iSmartNewsMessageTypeKey];
-        
-        const BOOL showRemoveAdsButton = [description objectForKey:@"removeAdsAction"] != nil;
-        NSString* uuid = [description objectForKey:@"uuid"];
-        
-        iSmartNewsVisualizerShownBlock shownBlock;
-        
-        if ([uuid length] > 0){
-            
-            SmartNewsItem* metaItem = findMetaItem(self.service, uuid);
-            if (metaItem){
-                
-                if ([[metaItem valueForKey:@"sequenceSrc"] length] > 0)
-                {
-                    NSArray* s = [[metaItem valueForKey:@"sequence"] componentsSeparatedByString:@"|"];
-                    if ([s count] > 1){
-                        NSString* ns = [[s subarrayWithRange:NSMakeRange(1, [s count] - 1)] componentsJoinedByString:@"|"];
-                        [metaItem setValue:ns forKey:@"sequence"];
-                        
-                        iSmartNewsLog(@"sequence updated to %@", [metaItem valueForKey:@"sequence"]);
-                    }
-                    else{
-                        [metaItem setValue:[metaItem valueForKey:@"sequenceSrc"] forKey:@"sequence"];
-                        [metaItem setValue:[metaItem valueForKey:@"urlsSrc"] forKey:@"urls"];
-                        
-                        iSmartNewsLog(@"sequence reset to %@", [metaItem valueForKey:@"sequence"]);
-                        
-                        if ([[metaItem randomize] boolValue]){
-                            [metaItem randomizeUrlsAndSequence];
-                            
-                            iSmartNewsLog(@"sequence/urls randomized to %@/%@ ", [metaItem valueForKey:@"sequence"], [metaItem valueForKey:@"urls"]);
-                        }
-                    }
-                }
-                else
-                {
-                    NSArray* urls = [[metaItem valueForKey:@"urls"] componentsSeparatedByString:@"!!!"];
-                    NSUInteger nextUrlIndex = (NSUInteger)[[metaItem valueForKey:@"urlIndex"] intValue] + 1;
-                    if (nextUrlIndex >= [urls count]){
-                        nextUrlIndex = 0;
-                        
-                        if ([[metaItem randomize] boolValue]){
-                            [metaItem randomizeUrlsAndSequence];
-                            
-                            iSmartNewsLog(@"sequence/urls randomized to %@/%@ ", [metaItem valueForKey:@"sequence"], [metaItem valueForKey:@"urls"]);
-                        }
-                    }
-                    [metaItem setValue:@(nextUrlIndex) forKey:@"urlIndex"];
-                }
-                
-                saveContext(self.service);
-                
-                NSDate* shownDate = [NSDate ism_date];
-                NSString* serviceName = self.service;
-
-                shownBlock = ^{
-                    NSString* rangeUuid = [description objectForKey:@"rangeUuid"];
-                    
-                    if ([rangeUuid length] > 0){
-                        NSManagedObject* metaRangeItem = findMetaRangeItem(serviceName, metaItem,rangeUuid);
-                        if (metaRangeItem){
-                            NSUInteger nextShown = [[metaRangeItem valueForKey:@"shown"] unsignedIntegerValue] + 1;
-                            [metaRangeItem setValue:@(nextShown) forKey:@"shown"];
-                            
-                            NSDateFormatter* formatter = [[NSDateFormatter alloc] init];
-                            [formatter setDateStyle:NSDateFormatterFullStyle];
-                            [formatter setTimeStyle:NSDateFormatterFullStyle];
-                            [metaRangeItem setValue:[formatter stringFromDate:shownDate] forKey:@"probability"];
-                            
-                            saveContext(self.service);
-                        }
-                    }
-                };
-            }
-        }
-        
-        if ([messageType isEqualToString:iSmartNewsContentTypeWeb])
-        {
-            _visualizer = [[iSmartNewsVisualizer alloc] initWebViewVisualizerWithURL:[NSURL URLWithString:message]
-                                                                 showRemoveAdsButton:showRemoveAdsButton];
-        }
-        else
-        {
-            _visualizer = [[iSmartNewsVisualizer alloc] initAlertViewVisualizerWithTitle:title
-                                                                                 message:message
-                                                                                  cancel:cancel
-                                                                                      ok:(url?(ok?ok:NSLocalizedString(@"OK",)):nil)
-                                                                                  review:review
-                                                                                  remind:remind
-                           ];
-            
-        }
-        
-        if (!_visualizer){
-            continue;
-        }
-
-        _visualizer.shownBlock = shownBlock;
-        _visualizer.allowAllIphoneOrientations = [[description objectForKey:@"allowAllIphoneOrientations"] isKindOfClass:[NSNumber class]] && [[description objectForKey:@"allowAllIphoneOrientations"] boolValue];
-        
-        __block UIInterfaceOrientationMask mask = 0;
-        [[[[description objectForKey:@"orientations"] lowercaseString] componentsSeparatedByString:@"|"] enumerateObjectsUsingBlock:^(NSString * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
-            if ([obj isEqualToString:@"up"]){
-                mask |= UIInterfaceOrientationMaskPortrait;
-            }
-            else if ([obj isEqualToString:@"down"]){
-                mask |= UIInterfaceOrientationMaskPortraitUpsideDown;
-            }
-            else if ([obj isEqualToString:@"left"]){
-                mask |= UIInterfaceOrientationMaskLandscapeLeft;
-            }
-            else if ([obj isEqualToString:@"right"]){
-                mask |= UIInterfaceOrientationMaskLandscapeRight;
-            }
-            else if ([obj isEqualToString:@"portrait"]){
-                mask |= UIInterfaceOrientationMaskPortrait|UIInterfaceOrientationMaskPortraitUpsideDown;
-            }
-            else if ([obj isEqualToString:@"landscape"]){
-                mask |= UIInterfaceOrientationMaskLandscape;
-            }
-            else if ([obj isEqualToString:@"all"]){
-                mask |= UIInterfaceOrientationMaskAll;
-            }
-        }];
-        
-        if (mask != 0){
-            _visualizer.orientationMask = mask;
-        }
-        
-        if ([description objectForKey:@"minDelay"] && [description objectForKey:@"maxDelay"]){
-            _visualizer.delayRange = NSMakeRange([[description objectForKey:@"minDelay"] unsignedIntegerValue],
-                                                 [[description objectForKey:@"maxDelay"] unsignedIntegerValue] - [[description objectForKey:@"minDelay"] unsignedIntegerValue]);
-        }
-        
-        _visualizer.metaUUID = uuid;
-        _visualizer.iTunesId = self.iTunesId;
-        _visualizer.onShow = [description objectForKey:@"onShow"];
-        _visualizer.delegate = self;
-        
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [_visualizer show];
-        });
-
-        return;
-    }
-    
-    
-    if (!connection_ && ([loadedNews_ count] == 0)){
-        [self completeEvent];
-    }
-}
-
-#pragma mark -
-
-- (void)cancelWasPressed
-{
-    if (![loadedNews_ count])
-        return;
-    
-    NSDictionary* message = [loadedNews_ objectAtIndex:0];
-    
-    iSmartNewsLog(@"CANCEL button clicked");
-    
-    if (![[message objectForKey:iSmartNewsMessageAlwaysKey] boolValue]
-        && ![[message objectForKey:iSmartNewsMessageRepeatKey] boolValue])
-    {
-        [self setCacheValue:message];
-    }
-    
-    [loadedNews_ removeObjectAtIndex:0];
-    
-    //--
-    // new since version 1.3
-    if (--gate_ == 0)
-    {
-        [loadedNews_ removeAllObjects];
-        [self completeEvent];
-        return;
-    }
-    //--
-    
-    [self showNextMessage];
-}
-
-- (void)actionWasPressed
-{
-    if (![loadedNews_ count])
-        return;
-    
-    NSDictionary* message = [loadedNews_ objectAtIndex:0];
-    
-    iSmartNewsLog(@"OK button clicked");
-    
-    if (![[message objectForKey:iSmartNewsMessageAlwaysKey] boolValue])
-        [self setCacheValue:message];
-    
-    NSString* urlString = [message objectForKey:iSmartNewsMessageUrlKey];
-    if (urlString)
-    {
-        iSmartNewsLog(@"Opening URL: %@",urlString);
-        NSURL* url = [NSURL URLWithString:urlString];
-        if (url){
-            if ([[UIApplication sharedApplication] canOpenURL:url]){
-                [[UIApplication sharedApplication] openURL:url];
-            }
-        }
-    }
-    
-    [loadedNews_ removeObjectAtIndex:0];
-    
-    //--
-    // new since version 1.3
-    if (--gate_ == 0)
-    {
-        [loadedNews_ removeAllObjects];
-        [self completeEvent];
-        return;
-    }
-    //--
-    
-    [self showNextMessage];
-}
-
-
-- (void)nothingWasPressed
-{
-    if (![loadedNews_ count])
-        return;
-    
-    [loadedNews_ removeObjectAtIndex:0];
-    
-    //--
-    // new since version 1.3
-    if (--gate_ == 0)
-    {
-        [loadedNews_ removeAllObjects];
-        [self completeEvent];
-        return;
-    }
-    //--
-    
-    [self showNextMessage];
-}
-
-- (void)saveLastShown:(NSString*)uuid condition:(NSString*)condition
-{
     if (uuid && ![uuid isEqualToString:@""]){
         
         NSManagedObjectContext* context = managedObjectContext(self.service);
@@ -1482,6 +1265,7 @@ static NSMutableDictionary* services = nil;
         
         if ([news count] == 1){
             
+            result = iSmartNewsLastShowConditionNotFound; //Not ItemNotFound
             SmartNewsItem* item = [news firstObject];
             [item setLastShown:[NSDate ism_date]];
             
@@ -1494,6 +1278,7 @@ static NSMutableDictionary* services = nil;
                     if (![conditions isEqualToString:@""]){
                         setShownInVersion = NO;
                         [[conditions componentsSeparatedByString:@"|"] enumerateObjectsUsingBlock:^(NSString * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
+                            
                             NSString* itemCondition = [[obj lowercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
                             if ([condition isEqualToString:itemCondition]){
                                 setShownInVersion = YES;
@@ -1505,199 +1290,236 @@ static NSMutableDictionary* services = nil;
                 
                 if (setShownInVersion){
                     [item setShownInVersion:[[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleVersion"]];
+                    [item setShownInVersionCondition:condition];
+                    result = iSmartNewsLastShowSavedSuccessfully;
+                }
+            }
+            else if ([[item oncePerInstall] boolValue]){
+                
+                __block BOOL setShownPerInstall = YES;
+                
+                if ([item oncePerInstallCondition]){
+                    NSString* conditions = [[item oncePerInstallCondition] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                    if (![conditions isEqualToString:@""]){
+                        setShownPerInstall = NO;
+                        [[conditions componentsSeparatedByString:@"|"] enumerateObjectsUsingBlock:^(NSString * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
+                            
+                            NSString* itemCondition = [[obj lowercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                            if ([condition isEqualToString:itemCondition]){
+                                setShownPerInstall = YES;
+                                *stop = YES;
+                            }
+                        }];
+                    }
+                }
+                
+                if (setShownPerInstall){
+                    [item setOncePerInstallShown:@(YES)];
+                    result = iSmartNewsLastShowSavedSuccessfully;
                 }
             }
             
             saveContext(self.service);
         }
     }
+    
+    return result;
 }
 
-#pragma mark -
-#pragma mark UIAlerViewDelegate
-
-- (void)visualizerDidClickRemoveAds:(iSmartNewsVisualizer*)visualizer
+#pragma mark Legacy news
+- (NSString*)cachePath
 {
-    if (![loadedNews_ count])
-        return;
+    NSString* _word_cache = [NSStringFromClass([NSCachedURLResponse class]) substringWithRange:NSMakeRange(2, 5)];
+    NSString* _ismn_c = [NSString stringWithFormat:@"%@%@", _str_i_smrt_news(), _word_cache];
+#if DEBUG
+    assert([@"iSmartNewsCache" isEqualToString:_ismn_c]);
+#endif
     
-    [self saveLastShown:visualizer.metaUUID condition:@"removeads"];
-    
-    [self resetVisualizerVar];
-
-    NSDictionary* description = [loadedNews_ objectAtIndex:0];
-    
-    [self nothingWasPressed];
-    
-    NSString* removeAdsAction = [description objectForKey:@"removeAdsAction"];
-    
-    if ([[removeAdsAction lowercaseString] isEqualToString:@"app"])
+    if ([self.service isEqualToString:@"news"])
     {
-        if (_removeAdsActionBlock)
-        {
-            void (^removeAdsActionBlock)() = [_removeAdsActionBlock copy];
-            
-            [[UIApplication sharedApplication] beginIgnoringInteractionEvents];
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                removeAdsActionBlock();
-                [[UIApplication sharedApplication] endIgnoringInteractionEvents];
-            });
-        }
+        return [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES)
+                 objectAtIndex:0]
+                stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.txt", _ismn_c]];
     }
     else
     {
-        if (removeAdsAction){
-            
-            if ([removeAdsAction rangeOfString:@"${URL}"].location != NSNotFound){
-                if ([visualizer url]){
-                    NSCharacterSet *chars = NSCharacterSet.URLQueryAllowedCharacterSet;
-                    NSString* encodedString = [[[visualizer url] absoluteString] stringByAddingPercentEncodingWithAllowedCharacters:chars];
-                    removeAdsAction = [removeAdsAction stringByReplacingOccurrencesOfString:@"${URL}" withString:encodedString];
-                }
-                else {
-                    removeAdsAction = [removeAdsAction stringByReplacingOccurrencesOfString:@"${URL}" withString:@"alert"];
-                }
-            }
-            
-            NSURL* removeAdsUrl = [NSURL URLWithString:removeAdsAction];
-            
-            if (removeAdsUrl && [[UIApplication sharedApplication] canOpenURL:removeAdsUrl]){
-                [[UIApplication sharedApplication] beginIgnoringInteractionEvents];
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    [[UIApplication sharedApplication] openURL:removeAdsUrl];
-                    [[UIApplication sharedApplication] endIgnoringInteractionEvents];
-                });
-            }
-        }
+        return [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES)
+                 objectAtIndex:0]
+                stringByAppendingPathComponent:[_ismn_c stringByAppendingFormat:@"_%@.txt",self.service]];
     }
 }
 
-- (void)visualizerDidFail:(iSmartNewsVisualizer*)visualizer
+- (void)setCacheValue:(NSDictionary*)_value
 {
-    if (![loadedNews_ count])
+    if ([_value objectForKey:@"skipCache"])
         return;
     
-    if (visualizer != _visualizer)
-        return;
-    
-    [self resetVisualizerVar];
-    
-    [self nothingWasPressed];
+    FILE* file = fopen([[self cachePath] UTF8String], "a");
+    if (file)
+    {
+        const char* v = [sn_md5ForDictionary(_value) UTF8String];
+        fwrite(v, strlen(v), 1, file);
+        fwrite("\n", 1, 1, file);
+        fflush(file);
+        fclose(file);
+        iSmartNewsLog(@"setCacheValue:%@ -> %s",_value,v);
+    }
 }
 
-- (void)visualizerDidClickNothing:(iSmartNewsVisualizer*)visualizer
+- (BOOL)checkIfMessageWasAlreadyShown:(NSDictionary*)_message
 {
-    if (![loadedNews_ count])
-        return;
+    if ([_message objectForKey:@"skipCache"])
+        return NO;
     
-    if (visualizer != _visualizer)
-        return;
+    FILE* cache = fopen([[self cachePath] UTF8String], "r");
+    if (!cache)
+        return NO;
     
-    [self saveLastShown:visualizer.metaUUID condition:@"cancel"];
+    rewind(cache);
     
-    [self resetVisualizerVar];
+    const char* key = [sn_md5ForDictionary(_message) UTF8String];
+    BOOL retVal = NO;
     
-    [self nothingWasPressed];
+    while(!retVal)
+    {
+        char buf[129];
+        memset(buf,0,sizeof(buf));
+        if (!fgets(buf, sizeof(buf)-1, cache))
+            break;
+        
+        size_t bytesRead = strlen(buf);
+        
+        for (; bytesRead && (buf[bytesRead-1]=='\n' || buf[bytesRead-1]=='\r'); --bytesRead )
+            buf[bytesRead-1]=0;
+        
+        if (bytesRead != CC_MD5_DIGEST_LENGTH * 2)
+            continue;
+        
+        if (!memcmp(key, buf, CC_MD5_DIGEST_LENGTH * 2))
+            retVal = YES;
+    }
+    
+    fclose(cache);
+    
+    iSmartNewsLog(@"checkIfMessageWasAlreadyShown:%@ -> %d",_message,retVal);
+    
+    return retVal;
 }
 
-- (void)visualizerDidClickCancel:(iSmartNewsVisualizer*)visualizer
+- (void)clearCache
 {
-    if (![loadedNews_ count])
-        return;
+    iSmartNewsMainThread;
     
-    if (visualizer != _visualizer)
-        return;
+    [[NSFileManager defaultManager] removeItemAtPath:[self cachePath] error:NULL];
     
-    [self saveLastShown:visualizer.metaUUID condition:@"cancel"];
-    
-    [self resetVisualizerVar];
-    
-    [self cancelWasPressed];
+    iSmartNewsLog(@"clearCache");
 }
 
-- (void)visualizerDidClickOk:(iSmartNewsVisualizer*)visualizer
+#pragma mark -
+#pragma mark Settings
+
+- (NSString*)settingsPath
 {
-    if (![loadedNews_ count])
-        return;
+    NSString* _ismn_cs = [NSString stringWithFormat:@"%@%@", _str_i_smrt_news(), @"CacheSettings"];
+#if DEBUG
+    assert([@"iSmartNewsCacheSettings" isEqualToString:_ismn_cs]);
+#endif
     
-    if (visualizer != _visualizer)
-        return;
-    
-    [self saveLastShown:visualizer.metaUUID condition:@"ok"];
-    
-    [self resetVisualizerVar];
-    
-    [self actionWasPressed];
+    if ([self.service isEqualToString:@"news"])
+    {
+        return [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES)
+                 objectAtIndex:0]
+                stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.plist", _ismn_cs]];
+    }
+    else
+    {
+        return [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES)
+                 objectAtIndex:0]
+                stringByAppendingPathComponent:[_ismn_cs stringByAppendingFormat:@"_%@.plist",self.service]];
+    }
 }
 
-- (void)visualizerDidClickOpenReview:(iSmartNewsVisualizer*)visualizer
+- (NSMutableDictionary*)settings
 {
-    if (![loadedNews_ count])
-        return;
+    if (!_settings)
+    {
+        _settings = [[NSMutableDictionary alloc] initWithContentsOfFile:[self settingsPath]];
+        if (!_settings)
+            _settings = [[NSMutableDictionary alloc] init];
+        
+        iSmartNewsLog(@"_settings: %@",_settings);
+    }
     
-    if (visualizer != _visualizer)
-        return;
-    
-    [self saveLastShown:visualizer.metaUUID condition:@"review"];
-    
-    [self resetVisualizerVar];
-    
-    [self nothingWasPressed];
-    
-    [[NSNotificationQueue defaultQueue] enqueueNotification:[NSNotification notificationWithName:iSmartNewsUserDidOpenReviewNotification object:self]
-                                               postingStyle:NSPostWhenIdle
-                                               coalesceMask:NSNotificationCoalescingOnName
-                                                   forModes:nil];
+    return _settings;
 }
 
-- (void)visualizerDidClickCancelReview:(iSmartNewsVisualizer*)visualizer
+- (void)save
 {
-    if (![loadedNews_ count])
-        return;
-    
-    if (visualizer != _visualizer)
-        return;
-    
-    [self saveLastShown:visualizer.metaUUID condition:@"cancel"];
-    
-    [self resetVisualizerVar];
-    
-    [self nothingWasPressed];
+    if (_settings)
+    {
+        [_settings writeToFile:[self settingsPath] atomically:YES];
+        iSmartNewsLog(@"_settings saved");
+    }
 }
 
-- (void)visualizerDidClickRemindLaterReview:(iSmartNewsVisualizer*)visualizer
+- (void)resetRunCounter
 {
-    if (![loadedNews_ count])
-        return;
-    
-    if (visualizer != _visualizer)
-        return;
-    
-    [self saveLastShown:visualizer.metaUUID condition:@"remind"];
-    
-    [self resetVisualizerVar];
-    
-    [self nothingWasPressed];
+    [[self settings] setObject:[NSNumber numberWithUnsignedLongLong:0] forKey:@"counter"];
+    [self save];
+}
+
+- (void)incrementCounter
+{
+    const UInt64 counter = [[[self settings] objectForKey:@"counter"] unsignedLongLongValue];
+    [[self settings] setObject:[NSNumber numberWithUnsignedLongLong:(counter + 1)] forKey:@"counter"];
+    [self save];
+}
+
+- (NSDate*)launchDate
+{
+    NSDate*  launchDate = [[self settings] objectForKey:@"launchDate"];
+    if (![launchDate isKindOfClass:[NSDate class]]){
+        [[self settings] setObject:[NSDate ism_date] forKey:@"launchDate"];
+        [self save];
+        launchDate = [[self settings] objectForKey:@"launchDate"];
+    }
+    return launchDate;
+}
+
+- (void)resetLaunchDate
+{
+    [[self settings] setObject:[NSDate ism_date] forKey:@"launchDate"];
+    [self save];
+}
+
+- (void)forceUpdate
+{
+    [self _updateWithEmuAppActivate:NO];
 }
 
 #pragma mark -
 #pragma mark Properties
 
-- (NSURL*)preprocessURL:(NSURL*)url{
+- (NSURL*)preprocessURL:(NSURL*)url
+{
 #if DEBUG || ADHOC
     OriginalURL = [url copy];
-    if (OriginalURL){
-        if ([GetDebugURLPostFix() length] > 0){
+    if (OriginalURL)
+    {
+        if ([GetDebugURLPostFix() length] > 0)
+        {
             NSURLComponents* urlComponents = [[NSURLComponents alloc] initWithString:[OriginalURL absoluteString]];
             NSString* path = [urlComponents path];
             NSString* parent = [path stringByDeletingLastPathComponent];
             NSString* lastComponent = [path lastPathComponent];
             NSString* extension = [lastComponent pathExtension];
-            if (extension){
+            if (extension)
+            {
                 NSString* pureName = [lastComponent stringByDeletingPathExtension];
                 [urlComponents setPath:[parent stringByAppendingPathComponent:[[pureName stringByAppendingFormat:@"_%@",GetDebugURLPostFix()] stringByAppendingPathExtension:extension]]];
             }
-            else {
+            else
+            {
                 [urlComponents setPath:[parent stringByAppendingPathComponent:[lastComponent stringByAppendingFormat:@"_%@",GetDebugURLPostFix()]]];
             }
             url = [urlComponents URL];
@@ -1719,239 +1541,124 @@ static NSMutableDictionary* services = nil;
         return;
     
     _url = [url copy];
-    
-    NSString* urlsMD5 = [queuesInfo_ objectForKey:@"URLS"];
-    NSString* currentMd5 = md5ForArray(_url?@[[_url absoluteString]]:nil);
-    
-    if (![urlsMD5 isEqualToString:currentMd5])
-    {
-        NSString* path = [self queuesInfoSavePath];
-        
-        if ([[NSFileManager defaultManager] fileExistsAtPath:path])
-        {
-            [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
-            queuesInfo_ = [NSMutableDictionary new];
-        }
-    }
-    
-    [queuesInfo_ setObject:md5ForArray(_url?@[[_url absoluteString]]:nil) forKey:@"URLS"];
-    [self saveQueuesInfo];
+
+    [[iSmartNewsQueuesInfo queuesInfoForService:[self service]] setURL:url];
 }
 
 #pragma mark -
-#pragma mark NSURLConnection delegate
+#pragma mark Updater delegate
 
-- (BOOL)connection:(NSURLConnection* )connection canAuthenticateAgainstProtectionSpace:(NSURLProtectionSpace* )protectionSpace
+-(void) updaterDidFailWithError:(NSError*) error userInfo:(NSDictionary*) userInfo
 {
-    if (connection != connection_){
-        return NO;
-    }
-    
-    return [protectionSpace.authenticationMethod isEqualToString:NSURLAuthenticationMethodServerTrust];
-}
-
-- (void)connection:(NSURLConnection* )connection didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge* )challenge
-{
-    if (connection != connection_){
-        return;
-    }
-    
-    [challenge.sender useCredential:[NSURLCredential credentialForTrust:challenge.protectionSpace.serverTrust] forAuthenticationChallenge:challenge];
-}
-
-- (void)connection:(NSURLConnection *)connection didReceiveResponse:(NSURLResponse *)response
-{
-    if (connection != connection_){
-        return;
-    }
-}
-
-- (void)connection:(NSURLConnection *)connection didReceiveData:(NSData *)data
-{
-    if (connection != connection_){
-        return;
-    }
-    
-    NSMutableData* buffer = objc_getAssociatedObject(connection, &connectionDataKey);
-    if (!buffer)
-    {
-        buffer = [NSMutableData new];
-        objc_setAssociatedObject(connection, &connectionDataKey, buffer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-	[buffer appendData:data];
-}
-
-- (void)connection:(NSURLConnection *)connection didFailWithError:(NSError *)error
-{
-    if (connection != connection_){
-        return;
-    }
-    
     iSmartNewsLog(@"Connection did fail %@",[error localizedDescription]);
     
-    const BOOL emulateAppActivate = [objc_getAssociatedObject(connection_, &emulateAppActivateKey) boolValue];
+    const BOOL emulateAppActivate = [[userInfo objectForKey:@"emulateAppActivate"] boolValue];
     
-    connection_ = nil;
-    objc_setAssociatedObject(connection, &connectionDataKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    
-    if (_updateBgTaskId != UIBackgroundTaskInvalid)
+    if (emulateAppActivate)
     {
-        [[UIApplication sharedApplication] endBackgroundTask:_updateBgTaskId];
-        _updateBgTaskId = UIBackgroundTaskInvalid;
-    }
-    
-    if (emulateAppActivate){
-        if ([[UIApplication sharedApplication] applicationState] == UIApplicationStateActive){
-            if (sn_AppUpgradeDone()){
-                [[iSmartEventsCenter sharedCenter] postEvent:iSmartEventsCenterAppDidFinishLaunchingAfterUpgradeEvent];
+#if DEBUG || ADHOC
+        assert(_integratedWithEventCenter);
+#endif
+        
+        if ([[UIApplication sharedApplication] applicationState] == UIApplicationStateActive)
+        {
+            if (sn_AppUpgradeDone())
+            {
+                [[iSmartEventsCenter sharedCenter] postEvent:iSmartEventsCenterAppDidFinishLaunchingAfterUpgradeEvent tryToDeferDeliveryInsteadOfSkipping:YES];
             }
-            else {
-                [[iSmartEventsCenter sharedCenter] postEvent:iSmartEventsCenterAppDidFinishLaunchingEvent];
+            else
+            {
+                [[iSmartEventsCenter sharedCenter] postEvent:iSmartEventsCenterAppDidFinishLaunchingEvent tryToDeferDeliveryInsteadOfSkipping:YES];
             }
         }
     }
 }
 
-- (void)connectionDidFinishLoading:(NSURLConnection *)connection
+-(void) updaterDidFinishWithData:(NSData*) data  userInfo:(NSDictionary*) userInfo
 {
-    if (connection != connection_){
-        return;
-    }
+    NSUInteger previousNewsLength = [_currentNews length];
     
-    iSmartNewsLog(@"Connection did finish loading");
+    _currentNews = [data copy];
     
-    NSMutableData* buffer = objc_getAssociatedObject(connection, &connectionDataKey);
-    objc_setAssociatedObject(connection, &connectionDataKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    
-    _currentNews = [buffer copy];
-    
-    const BOOL emulateAppActivate = [objc_getAssociatedObject(connection_, &emulateAppActivateKey) boolValue];
-
-    connection_ = nil;
-    
-    NSString* header = [[NSString alloc] initWithData:_currentNews encoding:NSUTF8StringEncoding];
+    const BOOL emulateAppActivate = [[userInfo objectForKey:@"emulateAppActivate"] boolValue];
     
     [self parseEvents:_currentNews];
     
-    metaReset(self.service);
+    sn_metaReset(self.service);
     
-    if (_updateBgTaskId != UIBackgroundTaskInvalid)
+    if (emulateAppActivate)
     {
-        [[UIApplication sharedApplication] endBackgroundTask:_updateBgTaskId];
-        _updateBgTaskId = UIBackgroundTaskInvalid;
-    }
-    
-    if (emulateAppActivate){
-        if ([[UIApplication sharedApplication] applicationState] == UIApplicationStateActive){
-            if (sn_AppUpgradeDone()){
-                [[iSmartEventsCenter sharedCenter] postEvent:iSmartEventsCenterAppDidFinishLaunchingAfterUpgradeEvent];
-            }
-            else {
-                [[iSmartEventsCenter sharedCenter] postEvent:iSmartEventsCenterAppDidFinishLaunchingEvent];
-            }
-        }
-    }
-}
-
-- (void)showForActiveEvents:(NSArray*)events
-{
-    [self parse:_currentNews events:events];
-}
-
-- (NSCachedURLResponse *)connection:(NSURLConnection *)connection willCacheResponse:(NSCachedURLResponse *)cachedResponse
-{
-    iSmartNewsLog(@"willCacheResponse: return nil");
-    return nil;
-}
-
-#pragma mark - Queues support
-
-- (NSString*)queuesInfoSavePath
-{
-    if ([self.service isEqualToString:@"news"]){
-        return [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES)
-                 objectAtIndex:0]
-                stringByAppendingPathComponent:@"iSmartNewsQueuesSettings.plist"];
-    }
-    else {
-        return [[NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES)
-                 objectAtIndex:0]
-                stringByAppendingPathComponent:[@"iSmartNewsQueuesSettings" stringByAppendingFormat:@"_%@.plist",self.service]];
-    }
-}
-
-- (void)loadQueuesInfo
-{
-    NSString* path = [self queuesInfoSavePath];
-    queuesInfo_ = [[NSDictionary dictionaryWithContentsOfFile:path] mutableCopy];
-    if (!queuesInfo_ || ![[queuesInfo_ objectForKey:@"URLS"] isKindOfClass:[NSString class]])
-    {
-        if ([[NSFileManager defaultManager] fileExistsAtPath:path])
-        {
-            [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
-        }
+#if DEBUG || ADHOC
+        assert(_integratedWithEventCenter);
+#endif
         
-        queuesInfo_ = [NSMutableDictionary new];
-    }
-    else
-    {
-        NSString* urlsMD5 = [queuesInfo_ objectForKey:@"URLS"];
-        NSString* currentMd5 = md5ForArray( _url?@[[_url absoluteString]]:nil);
-        
-        if (![urlsMD5 isEqualToString:currentMd5])
+        if ([[UIApplication sharedApplication] applicationState] == UIApplicationStateActive)
         {
-            if ([[NSFileManager defaultManager] fileExistsAtPath:path])
+            if (sn_AppUpgradeDone())
             {
-                [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
+                [[iSmartEventsCenter sharedCenter] postEvent:iSmartEventsCenterAppDidFinishLaunchingAfterUpgradeEvent tryToDeferDeliveryInsteadOfSkipping:YES];
             }
-            queuesInfo_ = [NSMutableDictionary new];
+            else
+            {
+                [[iSmartEventsCenter sharedCenter] postEvent:iSmartEventsCenterAppDidFinishLaunchingEvent tryToDeferDeliveryInsteadOfSkipping:YES];
+            }
         }
+    }
+    
+#warning TODO - check need notify
+    if (([_currentNews length] > 0) && (previousNewsLength != [_currentNews length]))
+    {
+        [self notifyAllEmbededPanels];
     }
 }
 
-- (void)saveQueuesInfo
+-(void) notifyAllEmbededPanels
 {
-    if (!_url)
-        return;
-    
-    NSString* path = [self queuesInfoSavePath];
-    
-    if ([[NSFileManager defaultManager] fileExistsAtPath:path])
-        [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
-    
-    [queuesInfo_ writeToFile:path atomically:YES];
+    for (iSmartNewsEmbeddedPanel* panel in [_embeddedPanels allValues])
+    {
+        [panel performSelector:@selector(newItemsAvailable) withObject:nil afterDelay:0.0f];
+    }
 }
 
 #pragma mark -
-
-- (void)incrementCounter {
-    const UInt64 counter = [[[self settings] objectForKey:@"counter"] unsignedLongLongValue];
-    [[self settings] setObject:[NSNumber numberWithUnsignedLongLong:(counter + 1)] forKey:@"counter"];
-    [self save];
-}
+#pragma mark - Appliaction state
 
 - (void)UIApplicationWillResignActiveNotification{
     UIApplicationWillResignActiveNotificationDone = YES;
 }
 
 - (void)UIApplicationDidEnterBackgroundNotification {
-    [self _update:NO];
-    [self clearAndHideAlert];
+    [self _updateWithEmuAppActivate:NO];
+    [self _fetchAppIdIfNeeded];
+    
+    [_mainDisplayList forceHide];
 }
 
 - (void)UIApplicationWillEnterForegroundNotification {
-    metaReset(self.service);
-    [self _update:NO];
+    sn_metaReset(self.service);
+    [self _updateWithEmuAppActivate:NO];
     [self incrementCounter];
 }
 
-- (void)UIApplicationDidFinishLaunchingNotification {
-    if (![[[self settings] objectForKey:@"launchDate"] isKindOfClass:[NSDate class]]){
+- (void)UIApplicationDidFinishLaunchingNotification
+{
+    if (![[[self settings] objectForKey:@"launchDate"] isKindOfClass:[NSDate class]])
+    {
         [[self settings] setObject:[NSDate ism_date] forKey:@"launchDate"];
         [self save];
     }
-    [self _update:YES];
+    
+    if (_integratedWithEventCenter)
+    {
+        [self _updateWithEmuAppActivate:YES];
+    }
+    else
+    {
+        [self _updateWithEmuAppActivate:NO];
+    }
+    
     [self incrementCounter];
+    [self _fetchAppIdIfNeeded];
 }
 
 #if DEBUG || ADHOC
@@ -1966,58 +1673,125 @@ static NSString* GetDebugURLPostFix()
 #endif//#if DEBUG || ADHOC
 
 - (void)UIApplicationDidBecomeActiveNotification{
-    metaReset(self.service);
+    
+    sn_metaReset(self.service);
 }
 
-- (void)setRemoveAdsActionBlock:(void(^)())block{
-    _removeAdsActionBlock = [block copy];
-}
-
-+ (NSString*)versionString{
-    return iSmartNewsVersion;
+- (void)_fetchAppIdIfNeeded
+{
+    if (self.iTunesId)
+    {
+        return;
+    }
+    
+    if (!sn_allowUpdate())
+    {
+        return;
+    }
+    
+    NSString* bundleId = [[NSBundle mainBundle] bundleIdentifier];
+    NSString* str = [@"http://itunes.apple.com/lookup?bundleId=" stringByAppendingString:bundleId];
+    NSURL* url = [NSURL URLWithString:str];
+    NSURLRequest* request = [NSURLRequest requestWithURL:url];
+    
+    UIBackgroundTaskIdentifier const task = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:nil];
+    
+#pragma warning repleace deprecated NSURLConnection
+#pragma clang diagnostic push                                           //NSURLConnection
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    [NSURLConnection sendAsynchronousRequest:request
+                                       queue:[NSOperationQueue mainQueue]
+                           completionHandler:^(NSURLResponse * _Nullable response, NSData * _Nullable data, NSError * _Nullable connectionError) {
+                               
+                               [[UIApplication sharedApplication] endBackgroundTask:task];
+                               
+                               if (connectionError){
+                                   return;
+                               }
+                               
+                               if (!data){
+                                   return;
+                               }
+                               
+                               if (self.iTunesId){
+                                   return;
+                               }
+                               
+                               NSDictionary* dict = [NSJSONSerialization JSONObjectWithData:data
+                                                                                    options:0
+                                                                                      error:NULL];
+                               if (!dict){
+                                   return;
+                               }
+                               
+                               NSArray* results = [dict objectForKey:@"results"];
+                               if (![results isKindOfClass:[NSArray class]]){
+                                   return;
+                               }
+                               
+                               [results enumerateObjectsUsingBlock:^(id  _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
+                                   if (![obj isKindOfClass:[NSDictionary class]]){
+                                       return;
+                                   }
+                                   
+                                   NSString* trackId = [obj objectForKey:@"trackId"];
+                                   if (![trackId isKindOfClass:[NSString class]]){
+                                       return;
+                                   }
+                                   
+                                   self.iTunesId = trackId;
+                               }];
+                           }];
+#pragma clang diagnostic pop                                        //NSURLConnection
 }
 
 + (void)load
 {
-    SwizzleInstanceMethod([UIApplication class], @selector(setStatusBarHidden:animated:),@selector(iSmartNews_setStatusBarHidden:animated:));
-    SwizzleInstanceMethod([UIApplication class], @selector(setStatusBarHidden:withAnimation:),@selector(iSmartNews_setStatusBarHidden:withAnimation:));
-    SwizzleInstanceMethod([UIApplication class], @selector(isStatusBarHidden),@selector(iSmartNews_isStatusBarHidden));
+    sn_swizzleInstanceMethod([UIApplication class], @selector(setStatusBarHidden:animated:),@selector(iSmartNews_setStatusBarHidden:animated:));
+    sn_swizzleInstanceMethod([UIApplication class], @selector(setStatusBarHidden:withAnimation:),@selector(iSmartNews_setStatusBarHidden:withAnimation:));
+    sn_swizzleInstanceMethod([UIApplication class], @selector(isStatusBarHidden),@selector(iSmartNews_isStatusBarHidden));
     
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidEnterBackgroundNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
                                                   usingBlock:^(NSNotification* notification){
-                                                      [[iSmartNews sharedNews] UIApplicationDidEnterBackgroundNotification];
+                                                      [[iSmartNews sharedNews]          UIApplicationDidEnterBackgroundNotification];
+                                                      [[iSmartNews sharedAdvertising]   UIApplicationDidEnterBackgroundNotification];
                                                   }];
     
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
                                                   usingBlock:^(NSNotification* notification){
-                                                      [[iSmartNews sharedNews] UIApplicationDidFinishLaunchingNotification];
+                                                      [[iSmartNews sharedNews]          UIApplicationDidFinishLaunchingNotification];
+                                                      [[iSmartNews sharedAdvertising]   UIApplicationDidFinishLaunchingNotification];
                                                   }];
     
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillEnterForegroundNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
                                                   usingBlock:^(NSNotification* notification){
-                                                      [[iSmartNews sharedNews] UIApplicationWillEnterForegroundNotification];
+                                                      [[iSmartNews sharedNews]          UIApplicationWillEnterForegroundNotification];
+                                                      [[iSmartNews sharedAdvertising]   UIApplicationWillEnterForegroundNotification];
                                                   }];
     
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillResignActiveNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
                                                   usingBlock:^(NSNotification* notification){
-                                                      [[iSmartNews sharedNews] UIApplicationWillResignActiveNotification];
+                                                      [[iSmartNews sharedNews]          UIApplicationWillResignActiveNotification];
+                                                      
+                                                      //Don't uncomment - set flag for sharedNews, not for advertising
+                                                      //[[iSmartNews sharedAdvertising]   UIApplicationWillResignActiveNotification];
                                                   }];
     
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
                                                   usingBlock:^(NSNotification* notification){
-                                                      [[iSmartNews sharedNews] UIApplicationDidBecomeActiveNotification];
+                                                      [[iSmartNews sharedNews]          UIApplicationDidBecomeActiveNotification];
+                                                      [[iSmartNews sharedAdvertising]   UIApplicationDidBecomeActiveNotification];
                                                   }];
-    
 }
 
 #if DEBUG || ADHOC
@@ -2118,5 +1892,4 @@ static NSString* GetDebugURLPostFix()
     [self parse:data events:nil];
 }
 #endif
-
 @end

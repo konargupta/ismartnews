@@ -4,22 +4,89 @@
 //
 //
 
-#if SMARTNEWS_COMPILE
+#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)
 
 #if !__has_feature(objc_arc)
 # error File should be compiled with ARC support (use '-fobjc-arc' flag)!
 #endif
 
 #import "iSmartNewsMeta.h"
-#import "iSmartNewsDate.h"
-#import "iSmartNewsCoreData.h"
-#import <objc/message.h>
-#import "iSmartNews.h"
-#import "iSmartNewsUtils.h"
+#import "iSmartNewsInternal.h"
+
+#pragma mark - Internal Utils
+
+__attribute__((visibility("hidden"))) static NSDate * meta_toUtcTime(NSDate* date)
+{
+    NSTimeZone *tz = [NSTimeZone defaultTimeZone];
+    NSInteger seconds = -[tz secondsFromGMTForDate:date];
+    return [NSDate dateWithTimeInterval:seconds sinceDate:date];
+}
+
+__attribute__((visibility("hidden"))) static id meta_adoptUtcDates(id obj){
+#if DEBUG
+    {
+        static BOOL volatile tested = NO;
+        if (!tested){
+            tested = YES;
+            static dispatch_once_t onceToken;
+            dispatch_once(&onceToken, ^{
+                
+                NSDateFormatter* formatter = [[NSDateFormatter alloc] init];
+                formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+                formatter.dateFormat = @"yyyy-MM-dd'T'HH:mm:ssZZZZZ";
+                formatter.timeZone = [NSTimeZone timeZoneForSecondsFromGMT:0];
+                
+                NSString *dateString = @"2016-12-19T16:39:57Z";
+                NSDate *date = [formatter dateFromString:dateString];
+                
+                {
+                    NSDictionary* original = @{ @"1": date };
+                    NSDictionary* adopted = meta_adoptUtcDates(original);
+                    assert(![[adopted objectForKey:@"1"] isEqualToDate:date]);
+                }
+            });
+        }
+    }
+#endif
+    
+    if ([obj isKindOfClass:[NSDictionary class]]){
+        NSMutableDictionary* dict = [NSMutableDictionary dictionaryWithCapacity:[obj count]];
+        [obj enumerateKeysAndObjectsUsingBlock:^(id  _Nonnull key, id  _Nonnull obj, BOOL * _Nonnull stop) {
+            [dict setObject:meta_adoptUtcDates(obj) forKey:key];
+        }];
+        return [dict copy];
+    }
+    else if ([obj isKindOfClass:[NSArray class]]){
+        NSMutableArray* arr = [NSMutableArray arrayWithCapacity:[obj count]];
+        [obj enumerateObjectsUsingBlock:^(id  _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
+            [arr addObject:meta_adoptUtcDates(obj)];
+        }];
+        return [arr copy];
+    }
+    else if ([obj isKindOfClass:[NSDate class]]){
+        return meta_toUtcTime(obj);
+    }
+    else {
+        return obj;
+    }
+}
+
+#pragma mark - Clear
 
 static NSMutableDictionary* g_sn_eventShownNews = nil;
 
-static void removeOldMeta(NSString* serviceName, NSSet* _activeUuuids){
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES void sn_evenShownNewsClearForService(NSString* service)
+{
+    if (!g_sn_eventShownNews){
+        g_sn_eventShownNews = [NSMutableDictionary dictionaryWithCapacity:10];
+    }
+    else
+    {
+        [[g_sn_eventShownNews objectForKey:service] removeAllObjects];
+    }
+}
+
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES void sn_removeOldMeta(NSString* serviceName, NSSet* _activeUuuids){
     
     NSMutableSet* activeUuuids = [_activeUuuids mutableCopy];
     
@@ -28,25 +95,113 @@ static void removeOldMeta(NSString* serviceName, NSSet* _activeUuuids){
         return;
     }
     
-    for (NSString* k in sn_protectedItems()){
-        if (![activeUuuids containsObject:k]){
-            [activeUuuids addObject:k];
+    NSSet* protected = sn_protectedItems();
+    for (id k in protected){
+        if ([k isKindOfClass:[NSString class]]){
+            if (![activeUuuids containsObject:k]){
+                [activeUuuids addObject:k];
+            }
         }
     }
     
-    NSFetchRequest *rangesFetchRequest = [[NSFetchRequest alloc] init];
-    [rangesFetchRequest setEntity:[NSEntityDescription entityForName:@"SmartNewsItem" inManagedObjectContext:context]];
-    [rangesFetchRequest setPredicate:[NSPredicate predicateWithFormat:@"NOT (uuid IN %@)",activeUuuids]];
+    NSFetchRequest* notActiveItemsRequest = [[NSFetchRequest alloc] init];
+    [notActiveItemsRequest setEntity:[NSEntityDescription entityForName:@"SmartNewsItem" inManagedObjectContext:context]];
+    [notActiveItemsRequest setPredicate:[NSPredicate predicateWithFormat:@"NOT (uuid IN %@)",activeUuuids]];
     
-    [[context executeFetchRequest:rangesFetchRequest error:NULL] enumerateObjectsUsingBlock:^(id obj, NSUInteger idx, BOOL* stop){
+    NSArray* itemsForRemove = [context executeFetchRequest:notActiveItemsRequest error:NULL];
+    
+    // additionally filter by regular patterns
+    itemsForRemove = [itemsForRemove filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id  _Nullable evaluatedObject, NSDictionary<NSString *,id> * _Nullable bindings) {
+
+        SmartNewsItem* item = evaluatedObject;
+        for (id k in protected){
+            if ([k isKindOfClass:[NSRegularExpression class]]){
+                const NSUInteger numberOfMatches = [k numberOfMatchesInString:[item uuid]
+                                                                      options:0
+                                                                        range:NSMakeRange(0, [[item uuid] length])];
+                
+                if (numberOfMatches != 0){
+                    return NO;
+                }
+            }
+        }
+        
+        return YES;
+    }]];
+    
+    NSFetchRequest* activeItemsRequest = [[NSFetchRequest alloc] init];
+    [activeItemsRequest setEntity:[NSEntityDescription entityForName:@"SmartNewsItem" inManagedObjectContext:context]];
+    [activeItemsRequest setPredicate:[NSPredicate predicateWithFormat:@"NOT (SELF IN %@)", itemsForRemove]];
+    
+    [itemsForRemove enumerateObjectsUsingBlock:^(id obj, NSUInteger idx, BOOL* stop){
         [context deleteObject:obj];
+    }];
+    
+    NSArray* itemsActive = [context executeFetchRequest:notActiveItemsRequest error:NULL];
+    [itemsActive enumerateObjectsUsingBlock:^(SmartNewsItem* obj, NSUInteger idx, BOOL* stop){
+        
+        if ([_activeUuuids containsObject:[obj uuid]])
+            obj.notPresented = @(NO);
+        else
+            obj.notPresented = @(YES);
     }];
     
     saveContext(serviceName);
 }
 
-NSDate* preprocessDate(id date){
+INTERNAL_ATTRIBUTES void sn_clearMeta(NSString* serviceName)
+{
+    [[iSmartNews newsForService:serviceName] resetAll];
+}
+
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES void sn_metaReset(NSString* serviceName){
     
+    NSManagedObjectContext* context = managedObjectContext(serviceName);
+    if (!context)
+        return;
+    
+    NSDate* now = [NSDate ism_date];
+    NSCalendar* calendar = [[NSCalendar alloc] initWithCalendarIdentifier:NSCalendarIdentifierGregorian];
+    
+    
+    NSDateComponents* monthComponents = [calendar components:NSCalendarUnitYear|NSCalendarUnitMonth|NSCalendarUnitDay|NSCalendarUnitHour|NSCalendarUnitMinute|NSCalendarUnitSecond fromDate:now];
+    [monthComponents setYear:SMARTNEWS_PER_MONTH_YEAR];
+    [monthComponents setMonth:SMARTNEWS_PER_CONST_MONTH];
+    NSDate* monthDate = [calendar dateFromComponents:monthComponents];
+    
+    NSDateComponents* weekComponents = [calendar components:NSCalendarUnitYear|NSCalendarUnitMonth|NSCalendarUnitDay|NSCalendarUnitHour|NSCalendarUnitMinute|NSCalendarUnitSecond fromDate:now];
+    
+    const long a = (14 - [weekComponents month]) / 12;
+    const long y = [weekComponents year] - a;
+    const long m = [weekComponents month] + 12 * a - 2;
+    long nowOfWeek = (7000 + ([weekComponents day] + y + y / 4 - y / 100 + y / 400 + (31 * m) / 12)) % 7;
+    if (nowOfWeek == 0){
+        nowOfWeek = 7;
+    }
+    
+    [weekComponents setYear:SMARTNEWS_PER_WEEK_YEAR];
+    [weekComponents setMonth:SMARTNEWS_PER_CONST_MONTH];
+    [weekComponents setDay:nowOfWeek];
+    NSDate* weekDate = [calendar dateFromComponents:weekComponents];
+    
+    NSFetchRequest *fetchRequestForRanges = [[NSFetchRequest alloc] init];
+    [fetchRequestForRanges setEntity:[NSEntityDescription entityForName:@"SmartNewsTimeRange" inManagedObjectContext:context]];
+    [fetchRequestForRanges setPredicate:[NSPredicate predicateWithFormat:@"NOT ( ((start <= %@) AND (end > %@)) OR ((start <= %@) AND (end > %@)) OR ((start <= %@) AND (end > %@)) )",now,now,monthDate,monthDate,weekDate,weekDate]];
+    NSArray* foundMetaRanges = [context executeFetchRequest:fetchRequestForRanges error:NULL];
+    
+    for (NSManagedObject* range in foundMetaRanges){
+        [range setValue:@(0) forKey:@"shown"];
+        [range setValue:nil forKey:@"probability"];
+        iSmartNewsLog(@"SMARTNEWS META CLEAR: %@",range);
+    }
+    
+    saveContext(serviceName);
+}
+
+#pragma mark - Parse
+
+INTERNAL_ATTRIBUTES NSDate* sn_preprocessDate(id date)
+{
     static NSCalendar* calendar = nil;
     if (!calendar){
         calendar = [[NSCalendar alloc] initWithCalendarIdentifier:NSCalendarIdentifierGregorian];
@@ -125,7 +280,7 @@ NSDate* preprocessDate(id date){
     components.year = SMARTNEWS_PER_WEEK_YEAR;
     components.month = SMARTNEWS_PER_CONST_MONTH;
     
-    if ([day isEqualToString:@"MO"]) components.day = 1;
+    if      ([day isEqualToString:@"MO"]) components.day = 1;
     else if ([day isEqualToString:@"TU"]) components.day = 2;
     else if ([day isEqualToString:@"WE"]) components.day = 3;
     else if ([day isEqualToString:@"TH"]) components.day = 4;
@@ -143,7 +298,7 @@ NSDate* preprocessDate(id date){
     return [calendar dateFromComponents:components];
 };
 
-static NSArray* preprocessMeta(NSString* serviceName, NSArray* input, NSMutableSet* metaUuid)
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSArray* sn_preprocessMeta(NSString* serviceName, NSArray* input, NSMutableSet* metaUuid)
 {
     NSDate*  launchDate = [[iSmartNews newsForService:serviceName] launchDate];
     
@@ -163,8 +318,11 @@ static NSArray* preprocessMeta(NSString* serviceName, NSArray* input, NSMutableS
             return NO;
         }
         
-        if ([meta isKindOfClass:[NSDictionary class]]){
-            meta = [meta iSmartNews_dictionaryWithLowercaseKeys];            
+        meta = [meta iSmartNews_dictionaryWithLowercaseKeys];
+        
+        if ([[meta objectForKey:@"uselocaltime"] isKindOfClass:[NSNumber class]]
+            && [[meta objectForKey:@"uselocaltime"] boolValue]){
+            meta = meta_adoptUtcDates(meta);
         }
         
         NSString* uuid = getMessageKey(meta,@"uuid");
@@ -187,6 +345,13 @@ static NSArray* preprocessMeta(NSString* serviceName, NSArray* input, NSMutableS
                 if (![meta iSmartNews_objectForKey:@"showOnlyIfUpgrade"]){
                     NSMutableDictionary* d = [meta mutableCopy];
                     [d setObject:@(YES) forKey:@"showonlyifupgrade"];
+                    meta = [d copy];
+                }
+            }
+            else if ([uuid isEqualToString:@"subscribe"] || [uuid hasPrefix:@"subscribe_"]){
+                if (![meta iSmartNews_objectForKey:@"oncePerInstall"]){
+                    NSMutableDictionary* d = [meta mutableCopy];
+                    [d setObject:@"cancel|ok" forKey:@"onceperinstall"];
                     meta = [d copy];
                 }
             }
@@ -221,36 +386,70 @@ static NSArray* preprocessMeta(NSString* serviceName, NSArray* input, NSMutableS
         else {
             orientations = [[orientations lowercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         }
+        
+        NSString* segment = getMessageKey(meta,@"segment");
+        if (![segment isKindOfClass:[NSString class]]){
+            segment = nil;
+        }
+        else {
+            segment = [segment stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if ([segment length] == 0){
+                segment = nil;
+            }
+            else {
+                NSArray* const segmentsToCheck = [[segment lowercaseString] componentsSeparatedByString:@"|"];
+                NSMutableArray* normalizedSegmentsToCheck = [NSMutableArray arrayWithCapacity:[segmentsToCheck count]];
+                [segmentsToCheck enumerateObjectsUsingBlock:^(id  _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
+                    NSString* normalized = [obj stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                    if ([normalized length] > 0){
+                        [normalizedSegmentsToCheck addObject:normalized];
+                    }
+                }];
+                segment = [normalizedSegmentsToCheck componentsJoinedByString:@"|"];
+                if ([segment length] == 0){
+                    segment = nil;
+                }
+            }
+        }
 
         NSNumber* priority = getMessageKey(meta,@"priority");
         if (![priority isKindOfClass:[NSNumber class]]){
             priority = nil;
         }
         
+        NSNumber* autoHideInterval = getMessageKey(meta,@"autoHideInterval");
+        if (![autoHideInterval isKindOfClass:[NSNumber class]])
+        {
+            autoHideInterval = nil;
+        }
+        
         NSNumber* minDelay = getMessageKey(meta,@"minDelay");
         NSNumber* maxDelay = getMessageKey(meta,@"maxDelay");
         
-        if (![minDelay isKindOfClass:[NSNumber class]]
-            || ![maxDelay isKindOfClass:[NSNumber class]]){
+        if (([minDelay isKindOfClass:[NSNumber class]] && [maxDelay isKindOfClass:[NSNumber class]]) != YES)
+        {
             minDelay = nil;
             maxDelay = nil;
         }
 
-        if (minDelay && !maxDelay){
+        if (minDelay != nil && maxDelay == nil)
+        {
             minDelay = nil;
             maxDelay = nil;
         }
             
-        if (maxDelay && !minDelay){
+        if (maxDelay != nil && minDelay == nil)
+        {
             minDelay = @(0);
         }
         
-        if (maxDelay && [maxDelay intValue] > 60){
+        if (maxDelay != nil && [maxDelay intValue] > 60)
+        {
             maxDelay = @(60);
         }
         
-        if ([minDelay intValue] > [maxDelay intValue]
-            || [minDelay intValue] < 0){
+        if (([minDelay intValue] > [maxDelay intValue]) || ([minDelay intValue] < 0))
+        {
             minDelay = nil;
             maxDelay = nil;
         }
@@ -263,20 +462,38 @@ static NSArray* preprocessMeta(NSString* serviceName, NSArray* input, NSMutableS
             minShowInterval = nil;
         }
         
-        id oncePerVersion = getMessageKey(meta,@"oncePerVersion");
         NSString* oncePerVersionCondition;
+        id oncePerVersion = getMessageKey(meta,@"oncePerVersion");
+        {
+            if ([oncePerVersion isKindOfClass:[NSNumber class]]){
+                // do nothing
+                oncePerVersionCondition = nil;
+            }
+            else if ([oncePerVersion isKindOfClass:[NSString class]]){
+                oncePerVersionCondition = oncePerVersion;
+                oncePerVersion = @(YES);
+            }
+            else {
+                oncePerVersion = @(NO);
+                oncePerVersionCondition = nil;
+            }
+        }
         
-        if ([oncePerVersion isKindOfClass:[NSNumber class]]){
-            // do nothing
-            oncePerVersionCondition = nil;
-        }
-        else if ([oncePerVersion isKindOfClass:[NSString class]]){
-            oncePerVersionCondition = oncePerVersion;
-            oncePerVersion = @(YES);
-        }
-        else {
-            oncePerVersion = @(NO);
-            oncePerVersionCondition = nil;
+        NSString* oncePerInstallCondition;
+        id oncePerInstall = getMessageKey(meta,@"oncePerInstall");
+        {
+            if ([oncePerInstall isKindOfClass:[NSNumber class]]){
+                // do nothing
+                oncePerInstallCondition = nil;
+            }
+            else if ([oncePerInstall isKindOfClass:[NSString class]]){
+                oncePerInstallCondition = oncePerInstall;
+                oncePerInstall = @(YES);
+            }
+            else {
+                oncePerInstall = @(NO);
+                oncePerInstallCondition = nil;
+            }
         }
         
         NSMutableArray* s_removeAdsAction = [[getMessageKey(meta,@"removeAdsAction") componentsSeparatedByString:@"|"] mutableCopy];
@@ -578,8 +795,8 @@ static NSArray* preprocessMeta(NSString* serviceName, NSArray* input, NSMutableS
                     return NO;
                 }
                 
-                start = preprocessDate(start);
-                end = preprocessDate(end);
+                start = sn_preprocessDate(start);
+                end   = sn_preprocessDate(end);
                 
                 if (!start || !end)
                     return NO;
@@ -622,6 +839,7 @@ static NSArray* preprocessMeta(NSString* serviceName, NSArray* input, NSMutableS
             return NO;
         }
         
+//INFO: new SmartNewsItem
         SmartNewsItem *item = [items lastObject];
         if (!item){
             item = [NSEntityDescription insertNewObjectForEntityForName:@"SmartNewsItem" inManagedObjectContext:context];
@@ -641,8 +859,17 @@ static NSArray* preprocessMeta(NSString* serviceName, NSArray* input, NSMutableS
         [item setValue:oncePerVersion forKey:@"oncePerVersion"];
         [item setValue:oncePerVersionCondition forKey:@"oncePerVersionCondition"];
         
+        [item setValue:oncePerInstall forKey:@"oncePerInstall"];
+        [item setValue:oncePerInstallCondition forKey:@"oncePerInstallCondition"];
+        
+#pragma mark - Reset shownInVersion
         if (![[item oncePerVersion] boolValue]){
             [item setShownInVersion:nil];
+            [item setShownInVersionCondition:nil];
+        }
+        
+        if (![[item oncePerInstall] boolValue]){
+            [item setOncePerInstallShown:@(NO)];
         }
         
         NSString* onShow = [meta iSmartNews_objectForKey:@"onShow"];
@@ -721,9 +948,12 @@ static NSArray* preprocessMeta(NSString* serviceName, NSArray* input, NSMutableS
         [item setValue:removeAdsAction forKey:@"removeAdsAction"];
         [item setValue:orientations forKey:@"orientations"];
         [item setValue:priority forKey:@"priority"];
+        [item setValue:segment forKey:@"segment"];
         
         [item setValue:minDelay forKey:@"minDelay"];
         [item setValue:maxDelay forKey:@"maxDelay"];
+        
+        [item setValue:autoHideInterval forKey:@"autoHideInterval"];
         
         if ([queue isKindOfClass:[NSString class]]){
             [item setValue:queue forKey:@"queue"];
@@ -759,25 +989,34 @@ static NSArray* preprocessMeta(NSString* serviceName, NSArray* input, NSMutableS
         }
         
         
+#pragma mark - Make AlertView MEGAURLs
         // Prosprocessing
         NSMutableArray* postProcessedUrls = [NSMutableArray new];
         [urls enumerateObjectsUsingBlock:^(id  _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
+            
             NSURLComponents* components = [NSURLComponents componentsWithString:obj];
-            if ([[components host] isEqualToString:smartNewsAlertDomain()]){
+            //AlertView
+            if ([[components host] isEqualToString:smartNewsAlertDomain()])
+            {
                 NSString* path = [components path];
                 NSDictionary* alertDescription = [meta objectForKey:path];
-                if ([alertDescription isKindOfClass:[NSDictionary class]]){
+                if ([alertDescription isKindOfClass:[NSDictionary class]])
+                {
                     NSMutableDictionary* message = [NSMutableDictionary new];
                     extractSmartNewsMessage(alertDescription,message);
                     
-                    if ([message objectForKey:iSmartNewsMessageTextKey]){
+                    if ([message objectForKey:iSmartNewsMessageTextKey])
+                    {
                         NSMutableString* query = [NSMutableString new];
                         
-                        for (NSString* key in [message allKeys]){
-                            if ([query length] > 0){
+                        for (NSString* key in [message allKeys])
+                        {
+                            if ([query length] > 0)
+                            {
                                 [query appendFormat:@"&%@=%@",key,[[message objectForKey:key] sn_stringByAddingPercentEncodingForRFC3986]];
                             }
-                            else {
+                            else
+                            {
                                 [query appendFormat:@"%@=%@",key,[[message objectForKey:key] sn_stringByAddingPercentEncodingForRFC3986]];
                             }
                         }
@@ -786,14 +1025,14 @@ static NSArray* preprocessMeta(NSString* serviceName, NSArray* input, NSMutableS
                         [postProcessedUrls addObject:stringFromNSURLComponents(components)];
                     }
                 }
-                else {
-                    
+                else
+                {
                     __block BOOL ok = NO;
                     
                     [[[components query] componentsSeparatedByString:@"&"] enumerateObjectsUsingBlock:^(NSString * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
                         NSArray* p = [obj componentsSeparatedByString:@"="];
                         if ([p count] == 2){
-                            if ([[p objectAtIndex:0] isEqualToString:@"iSmartNewsMessageTextKey"]){
+                            if ([[p objectAtIndex:0] isEqualToString:iSmartNewsMessageTextKey]){
                                 ok = YES;
                                 *stop = YES;
                             }
@@ -805,7 +1044,8 @@ static NSArray* preprocessMeta(NSString* serviceName, NSArray* input, NSMutableS
                     }
                 }
             }
-            else {
+            else //WebView
+            {
                 [postProcessedUrls addObject:obj];
             }
         }];
@@ -846,8 +1086,8 @@ static NSArray* preprocessMeta(NSString* serviceName, NSArray* input, NSMutableS
         
         for (NSDictionary* date in dates){
             
-            NSDate* start = preprocessDate([date iSmartNews_objectForKey:@"start"]);
-            NSDate* end = preprocessDate([date iSmartNews_objectForKey:@"end"]);
+            NSDate* start = sn_preprocessDate([date iSmartNews_objectForKey:@"start"]);
+            NSDate* end   = sn_preprocessDate([date iSmartNews_objectForKey:@"end"]);
             
             if (j < [existingRanges count]){
                 
@@ -910,7 +1150,7 @@ static NSArray* preprocessMeta(NSString* serviceName, NSArray* input, NSMutableS
     }]];
 }
 
-static SmartNewsItem* findMetaItem(NSString* serviceName, NSString* uuid){
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES SmartNewsItem* sn_findMetaItem(NSString* serviceName, NSString* uuid){
     
     NSManagedObjectContext* context = managedObjectContext(serviceName);
     if (!context)
@@ -922,7 +1162,7 @@ static SmartNewsItem* findMetaItem(NSString* serviceName, NSString* uuid){
     return [[context executeFetchRequest:fetchRequest error:NULL] lastObject];
 }
 
-static NSManagedObject* findMetaRangeItem(NSString* serviceName, NSManagedObject* meta, NSString* uuid){
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSManagedObject* sn_findMetaRangeItem(NSString* serviceName, NSManagedObject* meta, NSString* uuid){
     
     NSManagedObjectContext* context = managedObjectContext(serviceName);
     if (!context)
@@ -932,72 +1172,6 @@ static NSManagedObject* findMetaRangeItem(NSString* serviceName, NSManagedObject
     [fetchRequest setEntity:[NSEntityDescription entityForName:@"SmartNewsTimeRange" inManagedObjectContext:context]];
     [fetchRequest setPredicate:[NSPredicate predicateWithFormat:@"(item == %@) AND (uuid == %@)",meta,uuid]];
     return [[context executeFetchRequest:fetchRequest error:NULL] lastObject];
-}
-
-#if DEBUG
-static void dumpMeta(NSString* serviceName){
-    NSManagedObjectContext* context = managedObjectContext(serviceName);
-    
-    NSFetchRequest *fetchRequestForItems = [[NSFetchRequest alloc] init];
-    [fetchRequestForItems setEntity:[NSEntityDescription entityForName:@"SmartNewsItem" inManagedObjectContext:context]];
-    NSArray* items = [context executeFetchRequest:fetchRequestForItems error:NULL];
-    
-    NSFetchRequest *fetchRequestForRanges = [[NSFetchRequest alloc] init];
-    [fetchRequestForRanges setEntity:[NSEntityDescription entityForName:@"SmartNewsTimeRange" inManagedObjectContext:context]];
-    NSArray* ranges = [context executeFetchRequest:fetchRequestForRanges error:NULL];
-    
-    iSmartNewsLog(@"SMARTNEWS META: ========================\nITEMS:\n%@\nRANGES:\n%@\n ========================",items,ranges);
-}
-#else//#if DEBUG
-# define dumpMeta(...)      ((void)0)
-#endif//#if DEBUG
-
-void ism_clearMeta(NSString* serviceName){
-    [[iSmartNews newsForService:serviceName] resetAll];
-}
-
-static void metaReset(NSString* serviceName){
-    
-    NSManagedObjectContext* context = managedObjectContext(serviceName);
-    if (!context)
-        return;
-    
-    NSDate* now = [NSDate ism_date];
-    NSCalendar* calendar = [[NSCalendar alloc] initWithCalendarIdentifier:NSCalendarIdentifierGregorian];
-    
-    
-    NSDateComponents* monthComponents = [calendar components:NSCalendarUnitYear|NSCalendarUnitMonth|NSCalendarUnitDay|NSCalendarUnitHour|NSCalendarUnitMinute|NSCalendarUnitSecond fromDate:now];
-    [monthComponents setYear:SMARTNEWS_PER_MONTH_YEAR];
-    [monthComponents setMonth:SMARTNEWS_PER_CONST_MONTH];
-    NSDate* monthDate = [calendar dateFromComponents:monthComponents];
-    
-    NSDateComponents* weekComponents = [calendar components:NSCalendarUnitYear|NSCalendarUnitMonth|NSCalendarUnitDay|NSCalendarUnitHour|NSCalendarUnitMinute|NSCalendarUnitSecond fromDate:now];
-    
-    const long a = (14 - [weekComponents month]) / 12;
-    const long y = [weekComponents year] - a;
-    const long m = [weekComponents month] + 12 * a - 2;
-    long nowOfWeek = (7000 + ([weekComponents day] + y + y / 4 - y / 100 + y / 400 + (31 * m) / 12)) % 7;
-    if (nowOfWeek == 0){
-        nowOfWeek = 7;
-    }
-    
-    [weekComponents setYear:SMARTNEWS_PER_WEEK_YEAR];
-    [weekComponents setMonth:SMARTNEWS_PER_CONST_MONTH];
-    [weekComponents setDay:nowOfWeek];
-    NSDate* weekDate = [calendar dateFromComponents:weekComponents];
-    
-    NSFetchRequest *fetchRequestForRanges = [[NSFetchRequest alloc] init];
-    [fetchRequestForRanges setEntity:[NSEntityDescription entityForName:@"SmartNewsTimeRange" inManagedObjectContext:context]];
-    [fetchRequestForRanges setPredicate:[NSPredicate predicateWithFormat:@"NOT ( ((start <= %@) AND (end > %@)) OR ((start <= %@) AND (end > %@)) OR ((start <= %@) AND (end > %@)) )",now,now,monthDate,monthDate,weekDate,weekDate]];
-    NSArray* foundMetaRanges = [context executeFetchRequest:fetchRequestForRanges error:NULL];
-    
-    for (NSManagedObject* range in foundMetaRanges){
-        [range setValue:@(0) forKey:@"shown"];
-        [range setValue:nil forKey:@"probability"];
-        iSmartNewsLog(@"SMARTNEWS META CLEAR: %@",range);
-    }
-    
-    saveContext(serviceName);
 }
 
 static int dateOfWeek(NSCalendar* calendar, NSDate* date){
@@ -1031,11 +1205,14 @@ static BOOL canResetShownCounterMonth(NSCalendar* calendar, NSDate* date1, NSDat
     return (components1.year != components2.year) || (components1.month != components2.month);
 }
 
-static NSArray* metaNews(NSString* serviceName, NSArray* events){
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSArray* sn_metaNews(NSString* serviceName, NSArray* events){
+    
     
     NSManagedObjectContext* context = managedObjectContext(serviceName);
     if (!context)
         return nil;
+    
+    iSmartNewsLog(@"Searching metanews for events: %@", events);
     
     NSArray* attachedEvents = [events filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id  _Nonnull evaluatedObject, NSDictionary<NSString *,id> * _Nullable bindings) {
         return [(SmartNewsEvent*)evaluatedObject newsItem] != nil;
@@ -1188,7 +1365,6 @@ static NSArray* metaNews(NSString* serviceName, NSArray* events){
         objc_setAssociatedObject(metaItem, &metaItemUuidKey, metaItemUuid, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [allNews addObject:metaItem];
     }
-
     
     for (NSManagedObject* metaItem in [allNews copy]){
         
@@ -1216,10 +1392,22 @@ static NSArray* metaNews(NSString* serviceName, NSArray* events){
             }
         }
         
-        if (![item checkMinShowInterval]
-            || ![item checkAllowedForVersion]){
+        if (![item checkMinShowInterval])
+        {
             continue;
         }
+        
+        if (![item checkAllowedForVersion] || ![item checkAllowedForInstall])
+        {
+            continue;
+        }
+        
+        if (![item checkAllowedForAnotherConditions])
+        {
+            continue;
+        }
+        
+//INFO: make dictionary by newsitem
         
         NSMutableDictionary* message = [NSMutableDictionary new];
         
@@ -1251,10 +1439,19 @@ static NSArray* metaNews(NSString* serviceName, NSArray* events){
         [message setObject:[metaItem valueForKey:@"uuid"] forKey:@"uuid"];
         
         id metaItemUuid = objc_getAssociatedObject(metaItem, &metaItemUuidKey);
-        if (metaItemUuid){
-            if ([[foundMetaNewsSet objectForKey:metaItemUuid] objectForKey:@"rangeUuid"]){
-                [message setObject:[[foundMetaNewsSet objectForKey:metaItemUuid] objectForKey:@"rangeUuid"] forKey:@"rangeUuid"];
+        if (metaItemUuid != nil)
+        {
+            id rangeUuidValue = [[foundMetaNewsSet objectForKey:metaItemUuid] objectForKey:@"rangeUuid"];
+            if (rangeUuidValue != nil)
+            {
+                [message setObject:rangeUuidValue forKey:@"rangeUuid"];
             }
+        }
+        
+        NSNumber* autoHideInterval = [metaItem valueForKey:@"autoHideInterval"];
+        if (autoHideInterval != nil)
+        {
+            [message setObject:autoHideInterval forKey:@"autoHideInterval"];
         }
         
         NSString* removeAdsAction = [metaItem valueForKey:@"removeAdsAction"];
@@ -1274,8 +1471,8 @@ static NSArray* metaNews(NSString* serviceName, NSArray* events){
         }
         
         NSURLComponents* components = [NSURLComponents componentsWithString:url];
-        if ([[components host] isEqualToString:smartNewsAlertDomain()]){
-            
+        if ([[components host] isEqualToString:smartNewsAlertDomain()])
+        {
             NSMutableDictionary* params = [NSMutableDictionary new];
             
             [[[components query] componentsSeparatedByString:@"&"] enumerateObjectsUsingBlock:^(NSString * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
@@ -1305,6 +1502,10 @@ static NSArray* metaNews(NSString* serviceName, NSArray* events){
                 [message setObject:[params objectForKey:iSmartNewsMessageReviewKey] forKey:iSmartNewsMessageReviewKey];
             }
             
+            if ([params objectForKey:iSmartNewsMessageReviewTypeKey]){
+                [message setObject:[params objectForKey:iSmartNewsMessageReviewTypeKey] forKey:iSmartNewsMessageReviewTypeKey];
+            }
+            
             if ([params objectForKey:iSmartNewsMessageRemindKey]){
                 [message setObject:[params objectForKey:iSmartNewsMessageRemindKey] forKey:iSmartNewsMessageRemindKey];
             }
@@ -1322,7 +1523,8 @@ static NSArray* metaNews(NSString* serviceName, NSArray* events){
                 [message setObject:NSLocalizedString(@"Cancel",) forKey:iSmartNewsMessageCancelKey];
             }
         }
-        else{
+        else
+        {
             [message setObject:url forKey:iSmartNewsMessageTextKey];
             [message setObject:iSmartNewsContentTypeWeb forKey:iSmartNewsMessageTypeKey];
         }
@@ -1450,4 +1652,4 @@ static NSArray* metaNews(NSString* serviceName, NSArray* events){
     return [output copy];
 }
 
-#endif//#if SMARTNEWS_COMPILE
+#endif//#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)

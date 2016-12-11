@@ -4,7 +4,7 @@
 //
 //
 
-#if SMARTNEWS_COMPILE
+#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)
 
 #include "iSmartNewsZip.h"
 #import <Foundation/Foundation.h>
@@ -1906,7 +1906,7 @@ extern "C" {
     
     
     
-    __attribute__((visibility("hidden"))) int smartnews_unzip(const char* from, const char* to){
+EXTERN_C INTERNAL_ATTRIBUTES int smartnews_unzip(const char* from, const char* to){
         unzFile		_unzFile = NULL;
         
         _unzFile = unzOpen( (const char*)from );
@@ -2037,4 +2037,4 @@ extern "C" {
         return 0;
     }
     
-#endif//#if SMARTNEWS_COMPILE
+#endif//#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)

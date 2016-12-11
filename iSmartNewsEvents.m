@@ -4,40 +4,33 @@
 //
 //
 
-#if SMARTNEWS_COMPILE
+#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)
 
 #if !__has_feature(objc_arc)
 # error File should be compiled with ARC support (use '-fobjc-arc' flag)!
 #endif
 
 #import "iSmartNewsEvents.h"
-#import "iSmartNewsCoreData.h"
-#import "iSmartNewsUtils.h"
+#import "iSmartNewsInternal.h"
 #import <objc/message.h>
-
-#ifndef iSmartNewsLog
-#if DEBUG
-# define iSmartNewsLog(...)         NSLog(@"iSmartNews: %@",[NSString stringWithFormat:__VA_ARGS__])
-# define iSmartNewsMainThread       assert([NSThread isMainThread] && "Should be called from main thread only!")
-#else//!DEBUG
-# define NSLog(...)                 ((void)0)
-# ifdef assert
-#  undef assert
-# endif
-# define assert(...)                ((void)0)
-# define iSmartNewsMainThread       ((void)0)
-# define iSmartNewsLog(...)         ((void)0)
-#endif
-#endif
 
 static BOOL isPatternValid(NSString* pattern){
     NSArray* p = [pattern componentsSeparatedByString:@"|"];
     __block BOOL isValid = YES;
-    NSRegularExpression* re = [NSRegularExpression regularExpressionWithPattern:@"^(ON|OFF)=\\d+$" options:NSRegularExpressionCaseInsensitive error:NULL];
+    NSRegularExpression* re = [NSRegularExpression regularExpressionWithPattern:@"^(ON|OFF)=(\\d+)$" options:NSRegularExpressionCaseInsensitive error:NULL];
     [p enumerateObjectsUsingBlock:^(id  _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
-        if ([[re matchesInString:obj options:0 range:NSMakeRange(0, [obj length])] count] != 1){
+        NSArray* matches = [re matchesInString:obj options:0 range:NSMakeRange(0, [obj length])];
+        if ([matches count] != 1){
             isValid = NO;
             *stop = YES;
+        }
+        for (NSTextCheckingResult* r in matches){
+            NSString* s = [obj substringWithRange:[r rangeAtIndex:2]];
+            if ([s integerValue] == 0){
+                isValid = NO;
+                *stop = YES;
+                break;
+            }
         }
     }];
     return isValid;
@@ -89,33 +82,40 @@ NSArray* preprocessEvents(NSString* serviceName, NSArray* input)
     }
 #endif
     
+    
     NSManagedObjectContext* context = managedObjectContext(serviceName);
-    
-    iSmartNewsLog(@"SMARTNEWS META: ========================EVENTS BEFORE:%@\n ========================",(^id{
-        NSError* error;
-        NSFetchRequest *fetchRequest = [[NSFetchRequest alloc] init];
-        NSEntityDescription *entity = [NSEntityDescription entityForName:@"SmartNewsEvent" inManagedObjectContext:context];
-        [fetchRequest setEntity:entity];
-        [fetchRequest setSortDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"name" ascending:YES]]];
-        NSArray* a = [context executeFetchRequest:fetchRequest error:&error];
-        [a enumerateObjectsUsingBlock:^(id  _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
-            [(SmartNewsEvent*)obj name];
-            [(SmartNewsEvent*)obj newsItem];
-            [(SmartNewsEvent*)obj initialPattern];
-            [(SmartNewsEvent*)obj currentPattern];
-        }];
-        return a;
-    })());
 
+    NSMutableArray* globalEvents = [NSMutableArray new];
     
-    NSMutableArray* events = [NSMutableArray new];
+    [input enumerateObjectsUsingBlock:^(id  _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
+        if ([obj objectForKey:@"event"]){
+            NSDictionary* event = [obj objectForKey:@"event"];
+            _extractEvent(event, globalEvents);
+        }
+    }];
+    
+    // Add default events
+    if ([globalEvents count] == 0){
+        [globalEvents addObject:@{
+                                  @"name": iSmartEventsCenterAppActivateEvent,
+                                  @"pattern": @"on=1"
+                                  }];
+        [globalEvents addObject:@{
+                                  @"name": iSmartEventsCenterAppDidFinishLaunchingEvent,
+                                  @"pattern": @"on=1"
+                                  }];
+        
+        [globalEvents addObject:@{
+                                  @"name": iSmartEventsCenterAppDidFinishLaunchingAfterUpgradeEvent,
+                                  @"pattern": @"on=1"
+                                  }];
+    }
+    
     NSMutableArray* attachedEvents = [NSMutableArray new];
     
     NSArray* news = [input filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id obj, NSDictionary* bind){
         
         if ([obj objectForKey:@"event"]){
-            NSDictionary* event = [obj objectForKey:@"event"];
-            _extractEvent(event, events);
             return NO;
         }
         else if ([obj objectForKey:@"meta"]) {
@@ -148,14 +148,43 @@ NSArray* preprocessEvents(NSString* serviceName, NSArray* input)
                                                     }];
                             }
                         }];
+                        
+                        if ([uuid isEqualToString:@"review"]){
+                            [attachedEvents addObject:@{
+                                                        @"name": @"review:show_review_manually",
+                                                        @"pattern": @"ON=1",
+                                                        @"uuid": uuid
+                                                        }];
+                        }
                     }
-                    else {
+                    else
+                    {
                         if ([uuid isEqualToString:@"what_is_new"]){
                             [attachedEvents addObject:@{
                                                         @"name": @"app:didfinishlaunchingafterupgrade",
                                                         @"pattern": @"ON=1",
                                                         @"uuid": uuid
                                                         }];
+                        }
+                        
+                        if ([uuid isEqualToString:@"review"])
+                        {
+                            // add special event
+                            [attachedEvents addObject:@{
+                                                        @"name": @"review:show_review_manually",
+                                                        @"pattern": @"ON=1",
+                                                        @"uuid": uuid
+                                                        }];
+                            
+                            // add default global events as attached, because in another case review ignore global events if some
+                            // attached found!
+                            [globalEvents enumerateObjectsUsingBlock:^(id  _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
+                                [attachedEvents addObject:@{
+                                                            @"name": [obj objectForKey:@"name"],
+                                                            @"pattern": [obj objectForKey:@"pattern"],
+                                                            @"uuid": uuid
+                                                            }];
+                            }];
                         }
                     }
                 }
@@ -165,24 +194,8 @@ NSArray* preprocessEvents(NSString* serviceName, NSArray* input)
         return YES;
     }]];
     
-    // Add default event
-    if ([events count] == 0){
-        [events addObject:@{
-                            @"name": iSmartEventsCenterAppActivateEvent,
-                            @"pattern": @"on=1"
-                            }];
-        [events addObject:@{
-                            @"name": iSmartEventsCenterAppDidFinishLaunchingEvent,
-                            @"pattern": @"on=1"
-                            }];
-        
-        [events addObject:@{
-                            @"name": iSmartEventsCenterAppDidFinishLaunchingAfterUpgradeEvent,
-                            @"pattern": @"on=1"
-                            }];
-    }
-    
-    [events sortUsingComparator:^NSComparisonResult(id o1, id o2){
+    // Sort
+    [globalEvents sortUsingComparator:^NSComparisonResult(id o1, id o2){
         return [[o1 objectForKey:@"name"] compare:[o2 objectForKey:@"name"]];
     }];
     
@@ -206,9 +219,9 @@ NSArray* preprocessEvents(NSString* serviceName, NSArray* input)
             
             NSMutableArray* toDelete = [NSMutableArray new];
             
-            while (i < [events count] && j < [existing count])
+            while (i < [globalEvents count] && j < [existing count])
             {
-                NSDictionary* event = [events objectAtIndex:i];
+                NSDictionary* event = [globalEvents objectAtIndex:i];
                 SmartNewsEvent* eEvent = [existing objectAtIndex:j];
                 
                 NSString* pattern = [[event objectForKey:@"pattern"] lowercaseString];
@@ -247,9 +260,9 @@ NSArray* preprocessEvents(NSString* serviceName, NSArray* input)
                 [context deleteObject:[existing objectAtIndex:j]];
             }
             
-            for (;i < [events count];++i)
+            for (;i < [globalEvents count];++i)
             {
-                NSDictionary* event = [events objectAtIndex:i];
+                NSDictionary* event = [globalEvents objectAtIndex:i];
                 NSString* nName = [[event objectForKey:@"name"] lowercaseString];
                 NSString* pattern = [[event objectForKey:@"pattern"] lowercaseString];
                 SmartNewsEvent* eventObj = [NSEntityDescription insertNewObjectForEntityForName:@"SmartNewsEvent" inManagedObjectContext:context];
@@ -392,23 +405,7 @@ NSArray* preprocessEvents(NSString* serviceName, NSArray* input)
     
     saveContext(serviceName);
     
-    iSmartNewsLog(@"SMARTNEWS META: ========================EVENTS AFTER:%@\n ========================",(^id{
-        NSError* error;
-        NSFetchRequest *fetchRequest = [[NSFetchRequest alloc] init];
-        NSEntityDescription *entity = [NSEntityDescription entityForName:@"SmartNewsEvent" inManagedObjectContext:context];
-        [fetchRequest setEntity:entity];
-        [fetchRequest setSortDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"name" ascending:YES]]];
-        NSArray* a = [context executeFetchRequest:fetchRequest error:&error];
-        [a enumerateObjectsUsingBlock:^(id  _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
-            [(SmartNewsEvent*)obj name];
-            [(SmartNewsEvent*)obj newsItem];
-            [(SmartNewsEvent*)obj initialPattern];
-            [(SmartNewsEvent*)obj currentPattern];
-        }];
-        return a;
-    })());
-                     
     return news;
 }
 
-#endif//#if SMARTNEWS_COMPILE
+#endif//#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)

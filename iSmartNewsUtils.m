@@ -4,7 +4,7 @@
 //
 //
 
-#if SMARTNEWS_COMPILE
+#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)
 
 #if !__has_feature(objc_arc)
 # error File should be compiled with ARC support (use '-fobjc-arc' flag)!
@@ -13,6 +13,8 @@
 #import "iSmartNewsUtils.h"
 #import <CommonCrypto/CommonDigest.h>
 #import <sys/utsname.h>
+
+#import "iSmartNewsInternal.h"
 
 @implementation NSArray(SmartNews)
 - (BOOL)sn_isStrings{
@@ -46,7 +48,13 @@
 static NSString* mk_lang    = nil;
 static NSString* mk_country = nil;
 
-static void cleanMessageKeysCache(){
+
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES BOOL sn_allowUpdate()
+{
+    return YES;
+}
+
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES void sn_cleanMessageKeysCache(){
     mk_lang = nil;
     mk_country = nil;
 }
@@ -56,7 +64,11 @@ NSString* smartNewsAlertDomain(){
 }
 
 NSSet* sn_protectedItems(){
-    return [NSSet setWithObjects:@"review", @"what_is_new", nil];
+    NSRegularExpression *subscribe_regex = [NSRegularExpression regularExpressionWithPattern:@"^subscribe[_.*]?$"
+                                                                           options:NSRegularExpressionCaseInsensitive
+                                                                             error:NULL];
+    assert(subscribe_regex);
+    return [NSSet setWithObjects:@"review", @"what_is_new", subscribe_regex, nil];
 }
 
 void extractSmartNewsMessage(NSDictionary* desc, NSMutableDictionary* message)
@@ -74,6 +86,8 @@ void extractSmartNewsMessage(NSDictionary* desc, NSMutableDictionary* message)
     NSNumber* always = (NSNumber*)getMessageKey(desc,@"always");
     NSString* messageType = (NSString*)getMessageKey(desc, @"type");
     NSNumber* allowAllIphoneOrientations = (NSNumber*)getMessageKey(desc, @"allowAllIphoneOrientations");
+    
+    NSString* reviewType = (NSString*)getMessageKey(desc,@"review_type");
     
     if ([allowAllIphoneOrientations isKindOfClass:[NSNumber class]]){
         [message setObject:allowAllIphoneOrientations forKey:@"allowAllIphoneOrientations"];
@@ -116,10 +130,13 @@ void extractSmartNewsMessage(NSDictionary* desc, NSMutableDictionary* message)
         [message setObject:messageType forKey:iSmartNewsMessageTypeKey];
     
     // Fill text if title was set
-    if (![message objectForKey:iSmartNewsMessageTextKey]
-        && [message objectForKey:iSmartNewsMessageTitleKey]){
+    if (![message objectForKey:iSmartNewsMessageTextKey] && [message objectForKey:iSmartNewsMessageTitleKey])
+    {
         [message setObject:@"" forKey:iSmartNewsMessageTextKey];
     }
+    
+    if (reviewType && [reviewType isKindOfClass:[NSString class]])
+        [message setObject:reviewType forKey:iSmartNewsMessageReviewTypeKey];
     
     // -- since version 1.4
     NSString* queue = (NSString*)getMessageKey(desc,@"queue");
@@ -141,6 +158,11 @@ void clearNewsLang()
 /*! @internal */
 id getMessageKey(NSDictionary* _dict, NSString* _key)
 {
+    if (_dict == nil)
+        return nil;
+    
+    assert(_key != nil);
+    
     _key = [_key lowercaseString];
     
     if (!mk_lang){
@@ -249,7 +271,7 @@ id getMessageKey(NSDictionary* _dict, NSString* _key)
 }
 
 /*! @internal */
-static NSString* md5ForArray(NSArray* _array)
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSString* sn_md5ForArray(NSArray* _array)
 {
     CC_MD5_CTX  ctx;
     CC_MD5_Init(&ctx);
@@ -284,6 +306,7 @@ static NSString* md5ForArray(NSArray* _array)
     }
     
     unsigned char digest[CC_MD5_DIGEST_LENGTH];
+    memset(digest, 0, sizeof(digest));
     CC_MD5_Final(digest, &ctx);
     
     return [NSString stringWithFormat: @"%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
@@ -298,7 +321,7 @@ static NSString* md5ForArray(NSArray* _array)
 }
 
 /*! @internal */
-NSString* news_md5ForDictionary(NSDictionary* _dict)
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSString* sn_md5ForDictionary(NSDictionary* _dict)
 {
     CC_MD5_CTX  ctx;
     CC_MD5_Init(&ctx);
@@ -356,7 +379,7 @@ NSString* news_md5ForDictionary(NSDictionary* _dict)
             digest[14], digest[15]];
 }
 
-static void SwizzleInstanceMethod(Class class, SEL old, SEL newSelector)
+EXTERN_OR_STATIC void sn_swizzleInstanceMethod(Class class, SEL old, SEL newSelector)
 {
     Method oldMethod = class_getInstanceMethod(class, old);
     Method newMethod = class_getInstanceMethod(class, newSelector);
@@ -414,7 +437,7 @@ static void SwizzleInstanceMethod(Class class, SEL old, SEL newSelector)
 
 - (NSUInteger)iSmartNews_calendarIntervalSinceDate:(NSDate*)sinceDate
 {
-    if (!sinceDate)
+    if (sinceDate == nil)
         return 0;
     
     NSCalendar* currentCalendar = [NSCalendar currentCalendar];
@@ -688,12 +711,14 @@ static void SwizzleInstanceMethod(Class class, SEL old, SEL newSelector)
 @end
 
 
-NSString* stringFromNSURLComponents(NSURLComponents* components){
-    
-    if ([components respondsToSelector:@selector(string)]){
+NSString* stringFromNSURLComponents(NSURLComponents* components)
+{
+    if ([components respondsToSelector:@selector(string)])
+    {
         return [components string];
     }
-    else {
+    else
+    {
         NSMutableString* str = [NSMutableString stringWithFormat:@"%@://%@",[components scheme],[components host]];
         
         if ([[components scheme] isEqualToString:@"http"] && [[components port] intValue] == 80){
@@ -702,22 +727,31 @@ NSString* stringFromNSURLComponents(NSURLComponents* components){
         else if ([[components scheme] isEqualToString:@"https"] && [[components port] intValue] == 443){
             // do nothing
         }
-        else {
-            if ([components port]){
-                [str appendFormat:@":%@",[components port]];
+        else
+        {
+            NSNumber* port = [components port];
+            if (port != nil)
+            {
+                [str appendFormat:@":%@",port];
             }
         }
         
-        if ([components path]){
-            [str appendFormat:@"%@",[components path]];
+        NSString* path = [components path];
+        if (path != nil)
+        {
+            [str appendFormat:@"%@",path];
         }
         
-        if ([components query] && ![[components query] isEqualToString:@""]){
-            [str appendFormat:@"?%@",[components query]];
+        NSString* query = [components query];
+        if (query != nil && ![query isEqualToString:@""])
+        {
+            [str appendFormat:@"?%@",query];
         }
         
-        if ([components fragment] && ![[components fragment] isEqualToString:@""]){
-            [str appendFormat:@"#%@",[components fragment]];
+        NSString* fragment = [components fragment];
+        if (fragment != nil && ![fragment isEqualToString:@""])
+        {
+            [str appendFormat:@"#%@",fragment];
         }
         
         return [str copy];
@@ -736,4 +770,4 @@ NSString* stringFromNSURLComponents(NSURLComponents* components){
 }
 @end
 
-#endif//#if SMARTNEWS_COMPILE
+#endif//#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)

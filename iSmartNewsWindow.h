@@ -4,9 +4,8 @@
 //
 //
 
-#if SMARTNEWS_COMPILE
-
 #import <UIKit/UIKit.h>
+#import "iSmartNewsPublic.h"
 
 @interface iSmartNewsWindow : UIWindow
 @property (nonatomic,assign) UIInterfaceOrientationMask orientationMask;
@@ -14,5 +13,3 @@
 - (void)killWindow;
 + (instancetype)newsWindow;
 @end
-
-#endif//#if SMARTNEWS_COMPILE

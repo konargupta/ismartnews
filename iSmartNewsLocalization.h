@@ -5,6 +5,7 @@
 //
 
 #import <Foundation/Foundation.h>
+#import "iSmartNewsPublic.h"
 
 extern NSString* news_reviewTitle();
 extern NSString* news_reviewMessage();
