@@ -2905,7 +2905,7 @@ static NSManagedObjectModel* managedObjectModel()
         return __managedObjectModel;
     }
     
-#if DEBUG && 1// code is used to dump files into C arrays
+#if DEBUG && 0// code is used to dump files into C arrays
     void (^dumpFile)(NSString* path) = ^(NSString* path) {
         if (!path){
             return;

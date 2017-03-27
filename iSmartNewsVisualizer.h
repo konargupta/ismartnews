@@ -59,8 +59,10 @@ typedef void (^iSmartNewsVisualizerShownBlock)();
 
 - (NSURL*)url;
 
-- (id)initAlertViewVisualizerWithTitle:(NSString*)title message:(NSString*)message cancel:(NSString*)cancel ok:(NSString*)ok review:(NSString*)review remind:(NSString*)remind;
+//- (id)initAlertViewVisualizerWithTitle:(NSString*)title message:(NSString*)message cancel:(NSString*)cancel ok:(NSString*)ok review:(NSString*)review remind:(NSString*)remind;
+- (id)initAlertViewVisualizerWithDescription:(NSDictionary*) description;
 - (id)initWebViewVisualizerWithURL:(NSURL*)url showRemoveAdsButton:(BOOL)showRemoveAdsButton;
+- (id)initDirectActionVisualizerWithURL:(NSURL*)url;
 
 - (void)showWithDelayRange:(NSRange) delayRange;
 - (void)forceHide;

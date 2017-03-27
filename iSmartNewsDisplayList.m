@@ -14,20 +14,26 @@
 #import "iSmartNewsDisplayList.h"
 #import "iSmartNewsVisualizer.h"
 
-@interface iSmartNewsDisplayList ()<iSmartNewsVisualizerDelegate>
+NSString* const envQueuesTimeoutsKey = @"queuesTimeouts";
+NSString* const envGateKey           = @"gate";
+
+@interface iSmartNewsDisplayList ()<iSmartNewsVisualizerDelegate, iSmartNewsVisualizerStateNotificationReceiver>
 
 @end
 
 @implementation iSmartNewsDisplayList
 {
     iSmartNewsVisualizer* _visualizer;
+    NSDictionary*         _currentNewsMessage;
+    
+    iSmartNewsVisualizer* _nextVisualizer;
+    NSDictionary*         _nextNewsMessage;
     
     /*! @internal */
-    NSMutableArray*         loadedNews_;
-    NSMutableSet*           loadedNewsEvents_;
+    NSMutableArray*       _loadedNews;
     
+    NSMutableDictionary* _queuesTimeouts;
     NSString* currentQueue_;
-    NSMutableDictionary* queuesTimeouts_;
     
     NSTimer* queueTimer_;
     NSTimer* retryTimer_;
@@ -39,18 +45,16 @@
     NSUInteger              gate_;
     
     BOOL _listWasEnded;
-    BOOL _forceSwitchFlag;
+    BOOL _allowMultipleAsyncVisualizers;
 }
-
-@synthesize currentNewsMessage = _currentNewsMessage;
 
 -(instancetype)init
 {
     self = [super init];
     if (self)
     {
-        loadedNews_     = [NSMutableArray new];
-        queuesTimeouts_ = [NSMutableDictionary new];
+        _loadedNews     = [NSMutableArray new];
+        _queuesTimeouts = [NSMutableDictionary new];
         gate_ = UINT_MAX;
     }
     return self;
@@ -58,50 +62,66 @@
 
 - (void)assignNews:(NSArray*) news enveronment:(NSDictionary*) enveronment
 {
-    if (_forceSwitchFlag)
+    if (_allowMultipleAsyncVisualizers)
     {
-        iSmartNewsLog(@"forceHide afrer assign new news");
-        [self forceHide];
-        _forceSwitchFlag = NO;
+        assert(_nextVisualizer == nil);
+    }
+    else
+    {
+        assert((_visualizer == nil) && (_nextVisualizer == nil));
+        [self resetVisualizerTimers];
     }
     
-    [queueTimer_ invalidate];
-    queueTimer_ = nil;
-    
-    [retryTimer_ invalidate];
-    retryTimer_ = nil;
-    
+    gate_         = UINT_MAX;
     currentQueue_ = nil;
-    [queuesTimeouts_ removeAllObjects];
-    
-    gate_ = UINT_MAX;
-    
-    NSDictionary* queueTimeouts = [enveronment objectForKey:@"queueTimeouts"];
+
+    //Update queuesTimeouts
+    NSDictionary* queueTimeouts = [enveronment objectForKey:envQueuesTimeoutsKey];
     if ([queueTimeouts count] > 0)
     {
-        [queuesTimeouts_ addEntriesFromDictionary:queueTimeouts];
+        [_queuesTimeouts addEntriesFromDictionary:queueTimeouts];
     }
     
-    NSNumber* gate = [enveronment objectForKey:@"gate"];
+    //Assign gate
+    NSNumber* gate = [enveronment objectForKey:envGateKey];
     if (gate != nil)
     {
         gate_ = [gate unsignedIntegerValue];
-        [queuesTimeouts_ addEntriesFromDictionary:queueTimeouts];
     }
     
-    isFirst_ = YES;
-    
-    loadedNews_ = [news mutableCopy];
-    
-    _listWasEnded = NO;
-    
-    NSObject<iSmartNewsDisplayListDelegate>* delegate = [self delegate];
-    if ([delegate respondsToSelector:@selector(displayListWasAssignedNewMessages:)])
+    if ([news count] > 0)
     {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            
+        iSmartNewsLog(@"iSmartNewsDisplayList : assignNews: notify about WasAssignedNewMessages");
+        
+        isFirst_      = ([_loadedNews count] == 0);
+        _listWasEnded = NO;
+        
+        @synchronized (self)
+        {
+            [_loadedNews addObjectsFromArray:news];
+        }
+        
+        NSObject<iSmartNewsDisplayListDelegate>* delegate = [self delegate];
+        if ([delegate respondsToSelector:@selector(displayListWasAssignedNewMessages:)])
+        {
             [delegate displayListWasAssignedNewMessages:self];
-        });
+        }
+    }
+    else
+    {
+        iSmartNewsLog(@"iSmartNewsDisplayList : assignNews: notify about NotNewMessagesForAssignmen");
+        
+        if (_allowMultipleAsyncVisualizers == NO)
+        {
+            isFirst_      = ([_loadedNews count] == 0);;
+            _listWasEnded = ([_loadedNews count] == 0);;
+        }
+        
+        NSObject<iSmartNewsDisplayListDelegate>* delegate = [self delegate];
+        if ([delegate respondsToSelector:@selector(displayListNotNewMessagesForAssignment:)])
+        {
+            [delegate displayListNotNewMessagesForAssignment:self];
+        }
     }
 }
 
@@ -110,13 +130,24 @@
     return _visualizer;
 }
 
+-(NSUInteger)remainNewsMessagesCount
+{
+    return [_loadedNews count];
+}
+
+-(NSDictionary *)currentNewsMessage
+{
+    return _currentNewsMessage;
+}
+
 #pragma mark -
 
-- (void)listWasEnded
+- (void)raiseEventListWasEnded
 {
     if (_listWasEnded)
         return;
-    
+ 
+    iSmartNewsLog(@"iSmartNewsDisplayList : listWasEnded");
     _listWasEnded = YES;
     
     NSObject<iSmartNewsDisplayListDelegate>* delegate = [self delegate];
@@ -128,18 +159,13 @@
 
 -(void)resetEndedFlag
 {
+    iSmartNewsLog(@"iSmartNewsDisplayList : resetEndedFlag");
     _listWasEnded = NO;
 }
 
--(void)setForceSwitchFlag
+- (void) resetVisualizerTimers
 {
-    _forceSwitchFlag = YES;
-}
-
-- (void)forceHide
-{
-    [_visualizer forceHide];
-    [self resetVisualizerVar];
+    iSmartNewsLog(@"diplayList : resetVisualizerHelpers");
     
     [retryTimer_ invalidate];
     retryTimer_ = nil;
@@ -148,52 +174,172 @@
     queueTimer_ = nil;
     
     currentQueue_ = nil;
-    
-    [queuesTimeouts_   removeAllObjects];
-    [loadedNews_       removeAllObjects];
-    [loadedNewsEvents_ removeAllObjects];
-    
-    [self listWasEnded];
 }
 
-- (void)resetVisualizerVar
+- (void)hideForceAndClear
 {
-    _visualizer.delegate = nil;
+    iSmartNewsLog(@"iSmartNewsDisplayList : hideForceAndClear");
+    
+    //Force hide current
+    iSmartNewsVisualizer* currentVisualizer = _visualizer;
+    iSmartNewsVisualizer* nextVisualizer    = _nextVisualizer;
+    
+    if (currentVisualizer != nil)
+    {
+        [self resetVisualizerVar:_visualizer keepCurrentMessage:NO];
+        [currentVisualizer forceHide]; //After reset var
+        [self resetVisualizerTimers];
+    }
+    
+    if (nextVisualizer != nil)
+    {
+        [self resetVisualizerVar:nextVisualizer keepCurrentMessage:NO];
+        [nextVisualizer forceHide];
+        [self resetVisualizerTimers];
+    }
+    
+    //Clear news and send "WasEnded"
+    @synchronized (self)
+    {
+        [_queuesTimeouts   removeAllObjects];
+        [_loadedNews       removeAllObjects];
+    }
+
+    [self raiseEventListWasEnded];
+}
+
+- (void)setAllowMultipleAsyncVisualizers
+{
+    _allowMultipleAsyncVisualizers = YES;
+}
+
+- (void)resetVisualizerVar:(iSmartNewsVisualizer*) visualizer keepCurrentMessage:(BOOL) keepCurrentMessage
+{
+    iSmartNewsLog(@"iSmartNewsDisplayList : resetVisualizerVar %p", _visualizer);
+    
+    if ((visualizer != _visualizer) && (visualizer != _nextVisualizer))
+    {
+        iSmartNewsLog(@"iSmartNewsDisplayList : resetVisualizerVar unknown");
+        return;
+    }
+    
+    visualizer.delegate = nil;
     
     // WE delay destruction of visualizer to prevent will/hide notification to be sent for each news item.
     // If delay is used then notifications will be sent only once per block.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [_visualizer description];//some fake call
+        [visualizer description];//some fake call
     });
     
-    _visualizer = nil;
-    _currentNewsMessage = nil;
+    if (visualizer == _visualizer)
+    {
+        _visualizer = nil;
+        
+        if (keepCurrentMessage == NO)
+        {
+            _currentNewsMessage = nil;
+        }
+    }
+    else if (visualizer == _nextVisualizer)
+    {
+        _nextVisualizer  = nil;
+        _nextNewsMessage = nil;
+    }
+}
+
+- (void)switchToNextVisualizer
+{
+    iSmartNewsLog(@"diplayList : switchToNextVisualizer %p <= %p", _visualizer, _nextVisualizer);
+    
+    if (_nextVisualizer != nil)
+    {
+        assert((_visualizer == nil) || _allowMultipleAsyncVisualizers);
+        assert(_nextVisualizer != _visualizer);
+        
+        iSmartNewsVisualizer* currentVisualizer = _visualizer;
+        if (currentVisualizer != nil)
+        {
+            [self visualizerDidClickNothingForSwitchToNextOnly:currentVisualizer]; //Emulate close - for remove news from loadedNews_
+            [currentVisualizer forceHide]; //After reset var
+        }
+        
+        _visualizer         = _nextVisualizer;
+        _nextVisualizer     = nil;
+        
+        _currentNewsMessage = _nextNewsMessage;
+        _nextNewsMessage    = nil;
+    }
+}
+
+-(NSDictionary*) extractNextMessage
+{
+    NSDictionary* nextMessage = nil;
+    
+    iSmartNewsLog(@"diplayList : extractNextMessage");
+    
+    @synchronized (self)
+    {
+        if ([_loadedNews count] > 0)
+        {
+            nextMessage = [_loadedNews firstObject];
+            [_loadedNews removeObjectAtIndex:0];
+        }
+    }
+    
+    return nextMessage;
 }
 
 - (void)showNextMessage
 {
-    if (_visualizer){
+    iSmartNewsLog(@"diplayList : showNextMessage");
+    
+    if (_visualizer && (_allowMultipleAsyncVisualizers == NO))
+    {
+        iSmartNewsLog(@"diplayList : showNextMessage : showing - return");
         return;
     }
     
-    [retryTimer_ invalidate];
-    retryTimer_ = nil;
+    iSmartNewsLog(@"diplayList : showNextMessage : reset timers");
+    [self resetVisualizerTimers];
     
-    [queueTimer_ invalidate];
-    queueTimer_ = nil;
+    if ((_allowMultipleAsyncVisualizers == NO) && [[self delegate] displayListCanShowAlertView:self] != YES)
+    {
+        retryTimer_ = [NSTimer scheduledTimerWithTimeInterval:1
+                                                       target:self
+                                                     selector:@selector(showNextMessage)
+                                                     userInfo:nil repeats:NO];
+        
+        iSmartNewsLog(@"diplayList : showNextMessage : can't show - retry 1");
+        return;
+    }
+    
+    if (_allowMultipleAsyncVisualizers)
+    {
+        if (_nextVisualizer != nil)
+        {
+            iSmartNewsLog(@"diplayList : showNextMessage : remove not ready next");
+            
+            _nextNewsMessage = nil;
+            
+            _nextVisualizer.delegate                  = nil;
+            _nextVisualizer.stateNotificationReceiver = nil;
+            _nextVisualizer.shownBlock = nil;
+            [_nextVisualizer forceHide];
+            _nextVisualizer  = nil;
+        }
+    }
     
     // counter logic, new since version 1.2
     const UInt64 counter = [[self delegate] displayListGetCounterValue:self];
     
     NSDate* currentDate = [NSDate ism_date];
-    for (;
-         [loadedNews_ count];
-         [loadedNews_ removeObjectAtIndex:0]
-         )
+    while ([self remainNewsMessagesCount] > 0)
     {
-        NSDictionary* description = [loadedNews_ objectAtIndex:0];
+        NSDictionary* description = [self extractNextMessage];
         
         iSmartNewsLog(@"checking message: %@",description);
+        
+        //continue - will remove current message from loadedNews_
         
         NSDate* from = [description objectForKey:iSmartNewsMessageStartDateKey];
         if (from && [currentDate timeIntervalSinceDate:from] < 0){
@@ -219,7 +365,7 @@
         
         NSMutableDictionary* alertViewDescription = [NSMutableDictionary new];
         
-        for (NSString* key in @[iSmartNewsMessageTitleKey, iSmartNewsMessageTextKey, iSmartNewsMessageCancelKey, iSmartNewsMessageActionKey, iSmartNewsMessageReviewKey, iSmartNewsMessageUrlKey, iSmartNewsMessageReviewTypeKey])
+        for (NSString* key in @[iSmartNewsMessageTitleKey, iSmartNewsMessageTextKey, iSmartNewsMessageCancelKey, iSmartNewsMessageActionKey, iSmartNewsMessageReviewKey, iSmartNewsMessageUrlKey, iSmartNewsMessageRemindKey, iSmartNewsMessageReviewTypeKey])
         {
             NSString* value = [description objectForKey:key];
             if (value != nil)
@@ -229,9 +375,12 @@
         }
         
         NSString* message   = [description objectForKey:iSmartNewsMessageTextKey];
+        NSString* queue     = [description objectForKey:iSmartNewsMessageQueueKey];
         
-        NSString* queue = [description objectForKey:iSmartNewsMessageQueueKey];
-        if (queue)
+        
+        //Queue is legacy and supported only for FullScreen StepByStep Display Lists
+        assert(queue == nil || (queue != nil && (_allowMultipleAsyncVisualizers == NO)));
+        if (queue && (_allowMultipleAsyncVisualizers == NO))
         {
             //Make current queue
             if (!currentQueue_ || ![queue isEqualToString:currentQueue_])
@@ -241,7 +390,7 @@
                 NSUInteger nQueued = 0;
                 
                 //Found all news with same queue
-                for (NSDictionary* m in loadedNews_)
+                for (NSDictionary* m in _loadedNews)
                 {
                     NSString* queue = [m objectForKey:iSmartNewsMessageQueueKey];
                     if ([queue isEqualToString:currentQueue_])
@@ -271,8 +420,8 @@
                     [q_indexes setObject:n forKey:queue];
                 }
                 
-                [loadedNews_ removeObjectsInRange:NSMakeRange(0, [n unsignedIntValue])];
-                [loadedNews_ removeObjectsInRange:NSMakeRange(1, nQueued - [n unsignedIntValue] - 1)];
+                [_loadedNews removeObjectsInRange:NSMakeRange(0, [n unsignedIntValue])];
+                [_loadedNews removeObjectsInRange:NSMakeRange(1, nQueued - [n unsignedIntValue] - 1)];
                 
                 n = @([n unsignedIntValue] + 1);
                 [q_indexes setObject:n forKey:queue];
@@ -281,7 +430,7 @@
                 
                 iSmartNewsLog(@"NEXT INDEX %@",n);
                 
-                NSNumber* timeout = [queuesTimeouts_ objectForKey:queue];
+                NSNumber* timeout = [_queuesTimeouts objectForKey:queue];
                 if (timeout != nil)
                 {
                     uint32_t t = [timeout unsignedIntValue];
@@ -303,16 +452,28 @@
             }
         }
         
-        if ([[self delegate] displayListCanShowAlertView:self] != YES)
+        if ((_allowMultipleAsyncVisualizers == NO) && [[self delegate] displayListCanShowAlertView:self] != YES)
         {
             retryTimer_ = [NSTimer scheduledTimerWithTimeInterval:1
                                                            target:self
                                                          selector:@selector(showNextMessage)
                                                          userInfo:nil repeats:NO];
+            
+            iSmartNewsLog(@"diplayList : showNextMessage : can't show - retry 2");
+            
+#warning FixMe!
+            //Fast fix - return current message in-to _loadedNews
+            @synchronized (self)
+            {
+                [_loadedNews insertObject:description atIndex:0];
+            }
             return;
         }
-        
-        isFirst_ = NO;
+        else
+        {
+            [retryTimer_ invalidate];
+            retryTimer_ = nil;
+        }
         
         NSString * messageType = [description objectForKey:iSmartNewsMessageTypeKey];
         
@@ -324,18 +485,20 @@
         if ([uuid length] > 0)
         {
             SmartNewsItem* metaItem = sn_findMetaItem(self.service, uuid);
-            if (metaItem){
-                
+            if (metaItem)
+            {
                 if ([[metaItem valueForKey:@"sequenceSrc"] length] > 0)
                 {
                     NSArray* s = [[metaItem valueForKey:@"sequence"] componentsSeparatedByString:@"|"];
-                    if ([s count] > 1){
+                    if ([s count] > 1)
+                    {
                         NSString* ns = [[s subarrayWithRange:NSMakeRange(1, [s count] - 1)] componentsJoinedByString:@"|"];
                         [metaItem setValue:ns forKey:@"sequence"];
                         
                         iSmartNewsLog(@"sequence updated to %@", [metaItem valueForKey:@"sequence"]);
                     }
-                    else{
+                    else
+                    {
                         [metaItem setValue:[metaItem valueForKey:@"sequenceSrc"] forKey:@"sequence"];
                         [metaItem setValue:[metaItem valueForKey:@"urlsSrc"] forKey:@"urls"];
                         
@@ -352,12 +515,13 @@
                 {
                     NSArray* urls = [[metaItem valueForKey:@"urls"] componentsSeparatedByString:@"!!!"];
                     NSUInteger nextUrlIndex = (NSUInteger)[[metaItem valueForKey:@"urlIndex"] intValue] + 1;
-                    if (nextUrlIndex >= [urls count]){
+                    if (nextUrlIndex >= [urls count])
+                    {
                         nextUrlIndex = 0;
                         
-                        if ([[metaItem randomize] boolValue]){
+                        if ([[metaItem randomize] boolValue])
+                        {
                             [metaItem randomizeUrlsAndSequence];
-                            
                             iSmartNewsLog(@"sequence/urls randomized to %@/%@ ", [metaItem valueForKey:@"sequence"], [metaItem valueForKey:@"urls"]);
                         }
                     }
@@ -369,12 +533,15 @@
                 NSDate* shownDate = [NSDate ism_date];
                 NSString* serviceName = self.service;
                 
+                //***shownBlock*** begin
                 shownBlock = ^{
                     NSString* rangeUuid = [description objectForKey:@"rangeUuid"];
                     
-                    if ([rangeUuid length] > 0){
+                    if ([rangeUuid length] > 0)
+                    {
                         NSManagedObject* metaRangeItem = sn_findMetaRangeItem(serviceName, metaItem,rangeUuid);
-                        if (metaRangeItem){
+                        if (metaRangeItem)
+                        {
                             NSUInteger nextShown = [[metaRangeItem valueForKey:@"shown"] unsignedIntegerValue] + 1;
                             [metaRangeItem setValue:@(nextShown) forKey:@"shown"];
                             
@@ -387,6 +554,26 @@
                         }
                     }
                 };
+                //***shownBlock*** end
+            }
+        }
+        
+        if (_allowMultipleAsyncVisualizers && (_currentNewsMessage != nil) && (_visualizer != nil) && [_visualizer isShown])
+        {
+            if ([_currentNewsMessage isEqual:description])
+            {
+                iSmartNewsLog(@"diplayList : showNextMessage : try to shown current message");
+                
+                if ([[self delegate] respondsToSelector:@selector(displayListShouldToReloadCurrentMessage:)])
+                {
+                    BOOL shouldToReload = [[self delegate] displayListShouldToReloadCurrentMessage:self];
+                    
+                    if (shouldToReload != YES)
+                    {
+                        iSmartNewsLog(@"diplayList : showNextMessage : reshown current message was skipped");
+                        return;
+                    }
+                }
             }
         }
         
@@ -394,28 +581,38 @@
         {
             iSmartNewsVisualizerAppearance appearance = _visualizerAppearance;
             
-            _visualizer = [[iSmartNewsVisualizer alloc] initWebViewVisualizerWithURL:[NSURL URLWithString:message] appearance:appearance showRemoveAdsButton:showRemoveAdsButton];
-            _visualizer.embeddedPanel = _visualizerEmbeddedPanel;
+            _nextVisualizer = [[iSmartNewsVisualizer alloc] initWebViewVisualizerWithURL:[NSURL URLWithString:message] appearance:appearance showRemoveAdsButton:showRemoveAdsButton];
+            _nextVisualizer.embeddedPanel = _visualizerEmbeddedPanel;
+        }
+        else if ([messageType isEqualToString:iSmartNewsContentTypeDirectAction])
+        {
+            _nextVisualizer = [[iSmartNewsVisualizer alloc] initDirectActionVisualizerWithURL:[NSURL URLWithString:message]];
         }
         else
         {
             assert(_visualizerAppearance == isnVisualizerAppearancePopup);
-            
-            _visualizer = [[iSmartNewsVisualizer alloc] initAlertViewVisualizerWithDescription:alertViewDescription];
+
+            _nextVisualizer = [[iSmartNewsVisualizer alloc] initAlertViewVisualizerWithDescription:alertViewDescription];
         }
         
-        if (!_visualizer){
-            continue;
+        if (!_nextVisualizer)
+        {
+            continue; //Remove current message from loadedNews_
         }
+        
+        isFirst_ = NO;
+        
+        iSmartNewsLog(@"diplayList : showNextMessage : visualizer %p was maked", _nextVisualizer);
+        
         if (self.visualizerStateNotificationReceiver != nil)
         {
-            _visualizer.stateNotificationReceiver = self.visualizerStateNotificationReceiver;
+            _nextVisualizer.stateNotificationReceiver = self;
         }
         
-        _currentNewsMessage = description;
+        _nextNewsMessage  = description;
+        _nextVisualizer.shownBlock = shownBlock;
         
-        _visualizer.shownBlock = shownBlock;
-        _visualizer.allowAllIphoneOrientations = [[description objectForKey:@"allowAllIphoneOrientations"] isKindOfClass:[NSNumber class]] && [[description objectForKey:@"allowAllIphoneOrientations"] boolValue];
+        _nextVisualizer.allowAllIphoneOrientations = [[description objectForKey:@"allowAllIphoneOrientations"] isKindOfClass:[NSNumber class]] && [[description objectForKey:@"allowAllIphoneOrientations"] boolValue];
         
         __block UIInterfaceOrientationMask mask = 0;
         [[[[description objectForKey:@"orientations"] lowercaseString] componentsSeparatedByString:@"|"] enumerateObjectsUsingBlock:^(NSString * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
@@ -442,8 +639,9 @@
             }
         }];
         
-        if (mask != 0){
-            _visualizer.orientationMask = mask;
+        if (mask != 0)
+        {
+            _nextVisualizer.orientationMask = mask;
         }
         
         NSRange showDelayRange = NSMakeRange(0, 0);
@@ -454,38 +652,50 @@
                                           [[description objectForKey:@"maxDelay"] unsignedIntegerValue] - [[description objectForKey:@"minDelay"] unsignedIntegerValue]);
         }
         
-        _visualizer.metaUUID = uuid;
-        _visualizer.onShow = [description objectForKey:@"onShow"];
-        _visualizer.delegate = self;
+        _nextVisualizer.metaUUID = uuid;
+        _nextVisualizer.onShow = [description objectForKey:@"onShow"];
+        _nextVisualizer.delegate = self;
         
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [_visualizer showWithDelayRange:showDelayRange];
+        iSmartNewsVisualizer* makedVisualizer = _nextVisualizer;
+        
+        if ((_currentNewsMessage == nil) && (_visualizer == nil))
+        {
+            iSmartNewsLog(@"diplayList : showNextMessage : switchToNext %p immediately", _nextVisualizer);
+            [self switchToNextVisualizer];
+        }
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+            
+            if ([_visualizer isEqual:makedVisualizer] || [_nextVisualizer isEqual:makedVisualizer])
+            {
+                [makedVisualizer showWithDelayRange:showDelayRange];
+            }
         });
         
         return;
     }
     
 
-    if (/*!connection_ &&*/ ([loadedNews_ count] == 0)){
-        [self listWasEnded];
+    if ((_currentNewsMessage == nil) && (_nextNewsMessage == nil) && ([self remainNewsMessagesCount] == 0))
+    {
+        [self raiseEventListWasEnded];
     }
 }
 
-#pragma mark -
+#pragma mark - Actions
 
 - (void)nothingWasPressed
 {
-    if (![loadedNews_ count])
+    if (_currentNewsMessage == nil)
         return;
     
-    [loadedNews_ removeObjectAtIndex:0];
+    _currentNewsMessage = nil;
     
     //--
     // new since version 1.3
     if (--gate_ == 0)
     {
-        [loadedNews_ removeAllObjects];
-        [self listWasEnded];
+        [self hideForceAndClear];
         return;
     }
     //--
@@ -493,12 +703,32 @@
     [self showNextMessage];
 }
 
-- (void)cancelWasPressed
+- (void)nothingWasPressedForSwitchOnly
 {
-    if (![loadedNews_ count])
+    if (_currentNewsMessage == nil)
         return;
     
-    NSDictionary* message = [loadedNews_ objectAtIndex:0];
+    _currentNewsMessage = nil;
+    
+    //--
+    // new since version 1.3
+    if (--gate_ == 0)
+    {
+        [self hideForceAndClear];
+        return;
+    }
+    //--
+    
+    //Skip show next
+    //[self showNextMessage];
+}
+
+- (void)cancelWasPressed
+{
+    if (_currentNewsMessage == nil)
+        return;
+    
+    NSDictionary* message = _currentNewsMessage;
     
     iSmartNewsLog(@"CANCEL button clicked");
     
@@ -509,14 +739,13 @@
         [[self delegate] displayList:self markItemIsShown:message info:@{@"isMessage" : @(YES)}];
     }
     
-    [loadedNews_ removeObjectAtIndex:0];
+    _currentNewsMessage = nil;
     
     //--
     // new since version 1.3
     if (--gate_ == 0)
     {
-        [loadedNews_ removeAllObjects];
-        [self listWasEnded];
+        [self hideForceAndClear];
         return;
     }
     //--
@@ -526,10 +755,10 @@
 
 - (void)actionWasPressed
 {
-    if (![loadedNews_ count])
+    if (_currentNewsMessage == nil)
         return;
     
-    NSDictionary* message = [loadedNews_ objectAtIndex:0];
+    NSDictionary* message = _currentNewsMessage;
     
     iSmartNewsLog(@"OK button clicked");
     
@@ -551,14 +780,13 @@
         }
     }
     
-    [loadedNews_ removeObjectAtIndex:0];
+    _currentNewsMessage = nil;
     
     //--
     // new since version 1.3
     if (--gate_ == 0)
     {
-        [loadedNews_ removeAllObjects];
-        [self listWasEnded];
+        [self hideForceAndClear];
         return;
     }
     //--
@@ -568,24 +796,76 @@
 
 
 #pragma mark -
+#pragma mark iSmartNewsVisualizerStateNotificationReceiver - proxy
+
+- (void)visualizerWillShowMessage:(iSmartNewsVisualizer*)visualizer
+{
+    if ([visualizer isEqual:_nextVisualizer])
+    {
+        assert(_allowMultipleAsyncVisualizers);
+        [self switchToNextVisualizer];
+    }
+    else
+    {
+        assert([visualizer isEqual:_visualizer] && (_nextVisualizer == nil));
+    }
+    
+    if (self.visualizerStateNotificationReceiver)
+    {
+        [self.visualizerStateNotificationReceiver visualizerWillShowMessage:visualizer];
+    }
+}
+
+- (void)visualizerFinishedShowingMessage:(iSmartNewsVisualizer*)visualizer
+{
+    if (self.visualizerStateNotificationReceiver)
+    {
+        [self.visualizerStateNotificationReceiver visualizerFinishedShowingMessage:visualizer];
+    }
+}
+
+#pragma mark -
 #pragma mark iSmartVisualizerDelegate
 
 - (void)visualizerDidFail:(iSmartNewsVisualizer*)visualizer
 {
-    if (![loadedNews_ count])
+    if ((_currentNewsMessage == nil) && (_nextNewsMessage == nil))
         return;
     
-    if (visualizer != _visualizer)
+    if (visualizer == _nextVisualizer)
+    {
+        iSmartNewsLog(@"dispplayList : visualizerDidFail : next");
+        _nextVisualizer = nil;
+        
+        if ([self.delegate respondsToSelector:@selector(displayListFailedToShowNextMessage:)])
+        {
+            [self.delegate displayListFailedToShowNextMessage:self];
+        }
+        
+        _nextNewsMessage = nil;
         return;
+    }
+    else if (visualizer != _visualizer)
+    {
+        iSmartNewsLog(@"dispplayList : visualizerDidFail : unknown ...");
+        return;
+    }
     
-    [self resetVisualizerVar];
+    [self resetVisualizerVar:visualizer keepCurrentMessage:YES];
+    
+    iSmartNewsLog(@"dispplayList : visualizerDidFail");
+    
+    if ([self.delegate respondsToSelector:@selector(displayListFailedToShowMessage:)])
+    {
+        [self.delegate displayListFailedToShowMessage:self];
+    }
     
     [self nothingWasPressed];
 }
 
 - (void)visualizerDidClickNothing:(iSmartNewsVisualizer*)visualizer
 {
-    if (![loadedNews_ count])
+    if (_currentNewsMessage == nil)
         return;
     
     if (visualizer != _visualizer)
@@ -596,14 +876,16 @@
         [[self delegate] displayList:self markItemIsShown:@{@"uuid" : visualizer.metaUUID} info:@{@"condition" : @"cancel"}];
     }
     
-    [self resetVisualizerVar];
+    [self resetVisualizerVar:visualizer keepCurrentMessage:YES];
     
     [self nothingWasPressed];
 }
 
-- (void)visualizerDidClickCancel:(iSmartNewsVisualizer*)visualizer
+- (void)visualizerDidClickNothingForSwitchToNextOnly:(iSmartNewsVisualizer*)visualizer
 {
-    if (![loadedNews_ count])
+    assert(_allowMultipleAsyncVisualizers);
+    
+    if (_currentNewsMessage == nil)
         return;
     
     if (visualizer != _visualizer)
@@ -614,14 +896,32 @@
         [[self delegate] displayList:self markItemIsShown:@{@"uuid" : visualizer.metaUUID} info:@{@"condition" : @"cancel"}];
     }
     
-    [self resetVisualizerVar];
+    [self resetVisualizerVar:visualizer keepCurrentMessage:YES];
+    
+    [self nothingWasPressedForSwitchOnly];
+}
+
+- (void)visualizerDidClickCancel:(iSmartNewsVisualizer*)visualizer
+{
+    if (_currentNewsMessage == nil)
+        return;
+    
+    if (visualizer != _visualizer)
+        return;
+    
+    if ([visualizer.metaUUID length] > 0)
+    {
+        [[self delegate] displayList:self markItemIsShown:@{@"uuid" : visualizer.metaUUID} info:@{@"condition" : @"cancel"}];
+    }
+    
+    [self resetVisualizerVar:visualizer keepCurrentMessage:YES];
     
     [self cancelWasPressed];
 }
 
 - (void)visualizerDidClickOk:(iSmartNewsVisualizer*)visualizer
 {
-    if (![loadedNews_ count])
+    if (_currentNewsMessage == nil)
         return;
     
     if (visualizer != _visualizer)
@@ -632,7 +932,7 @@
         [[self delegate] displayList:self markItemIsShown:@{@"uuid" : visualizer.metaUUID} info:@{@"condition" : @"ok"}];
     }
     
-    [self resetVisualizerVar];
+    [self resetVisualizerVar:visualizer keepCurrentMessage:YES];
     
     [self actionWasPressed];
 }
@@ -640,7 +940,7 @@
 
 - (void)visualizerDidClickLink:(iSmartNewsVisualizer*)visualizer
 {
-    if (![loadedNews_ count])
+    if (_currentNewsMessage == nil)
         return;
     
     if (visualizer != _visualizer)
@@ -657,14 +957,14 @@
         }
     }
     
-    [self resetVisualizerVar];
+    [self resetVisualizerVar:visualizer keepCurrentMessage:YES];
     
     [self nothingWasPressed]; //Link == external handler on server
 }
 
 - (void)visualizerDidClickCallback:(iSmartNewsVisualizer*)visualizer userInfo:(NSDictionary*)userInfo
 {
-    if (![loadedNews_ count])
+    if (_currentNewsMessage == nil)
         return;
     
     if (visualizer != _visualizer)
@@ -679,7 +979,7 @@
             [[self delegate] displayList:self markItemIsShown:@{@"uuid" : visualizer.metaUUID} info:@{@"condition" : @"callback"}];
         }
         
-        [self resetVisualizerVar];
+        [self resetVisualizerVar:visualizer keepCurrentMessage:YES];
         
         [self nothingWasPressed];
     }
@@ -708,7 +1008,7 @@
 
 - (void)visualizerDidClickRemoveAds:(iSmartNewsVisualizer*)visualizer
 {
-    if (![loadedNews_ count])
+    if (_currentNewsMessage == nil)
         return;
     
     if ([visualizer.metaUUID length] > 0)
@@ -716,9 +1016,9 @@
         [[self delegate] displayList:self markItemIsShown:@{@"uuid" : visualizer.metaUUID} info:@{@"condition" : @"removeads"}];
     }
     
-    [self resetVisualizerVar];
-    
-    NSDictionary* description = [loadedNews_ objectAtIndex:0];
+#warning CheckMe!
+    NSDictionary* description = _currentNewsMessage;
+    [self resetVisualizerVar:visualizer keepCurrentMessage:YES];
     
     [self nothingWasPressed];
     
@@ -736,7 +1036,7 @@
 
 - (void)visualizerDidClickOpenReview:(iSmartNewsVisualizer*)visualizer
 {
-    if (![loadedNews_ count])
+    if (_currentNewsMessage == nil)
         return;
     
     if (visualizer != _visualizer)
@@ -747,7 +1047,7 @@
         [[self delegate] displayList:self markItemIsShown:@{@"uuid" : visualizer.metaUUID} info:@{@"condition" : @"review"}];
     }
     
-    [self resetVisualizerVar];
+    [self resetVisualizerVar:visualizer keepCurrentMessage:YES];
     
     [self nothingWasPressed];
     
@@ -759,7 +1059,7 @@
 
 - (void)visualizerDidClickCancelReview:(iSmartNewsVisualizer*)visualizer
 {
-    if (![loadedNews_ count])
+    if (_currentNewsMessage == nil)
         return;
     
     if (visualizer != _visualizer)
@@ -770,14 +1070,14 @@
         [[self delegate] displayList:self markItemIsShown:@{@"uuid" : visualizer.metaUUID} info:@{@"condition" : @"cancel"}];
     }
     
-    [self resetVisualizerVar];
+    [self resetVisualizerVar:visualizer keepCurrentMessage:YES];
     
     [self nothingWasPressed];
 }
 
 - (void)visualizerDidClickRemindLaterReview:(iSmartNewsVisualizer*)visualizer
 {
-    if (![loadedNews_ count])
+    if (_currentNewsMessage == nil)
         return;
     
     if (visualizer != _visualizer)
@@ -788,7 +1088,7 @@
         [[self delegate] displayList:self markItemIsShown:@{@"uuid" : visualizer.metaUUID} info:@{@"condition" : @"remind"}];
     }
     
-    [self resetVisualizerVar];
+    [self resetVisualizerVar:visualizer keepCurrentMessage:YES];
     
     [self nothingWasPressed];
 }

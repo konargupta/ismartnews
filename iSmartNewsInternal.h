@@ -44,12 +44,11 @@ typedef NS_ENUM(NSInteger, iSmartNewsSaveLastShowResult)
 #import "iSmartNewsActions.h"
 
 
-
-#if DEBUG
+#if DEBUG || TARGET_IPHONE_SIMULATOR
 #   if NO_SMARTNEWS_LOGS
 #       define iSmartNewsLog(...)     ((void)0)
 #   else
-#       define iSmartNewsLog(...)     NSLog(@"iSmartNews: %@",[NSString stringWithFormat:__VA_ARGS__])
+#       define iSmartNewsLog(...)     NSLog(@"SN: %@",[NSString stringWithFormat:__VA_ARGS__])
 #   endif
 #   define iSmartNewsMainThread       assert([NSThread isMainThread] && "Should be called from main thread only!")
 #else//!DEBUG

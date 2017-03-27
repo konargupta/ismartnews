@@ -1,6 +1,6 @@
 /*!
  @file       iSmartNews.h
- @version    3.5.11
+ @version    4.6.1
  */
 
 #import <Foundation/Foundation.h>
@@ -9,11 +9,11 @@
 
 #define ISMART_NEWS_MAKE_VERSION(MAJOR,MINOR,PATCH)       ((MAJOR*1000*1000) + (MINOR*1000) + PATCH)
 
-#define ISMART_NEWS_VERSION_3_5_11      ISMART_NEWS_MAKE_VERSION(3,5,11)
+#define ISMART_NEWS_VERSION_4_6_1       ISMART_NEWS_MAKE_VERSION(4,6,1)
 
-#define ISMART_NEWS_CURRENT_VERSION     ISMART_NEWS_VERSION_3_5_11
+#define ISMART_NEWS_CURRENT_VERSION     ISMART_NEWS_VERSION_4_6_1
 
-#define iSmartNewsVersion               @"3.5.11"
+#define iSmartNewsVersion               @"4.6.1"
 
 extern NSString* const iSmartNewsUserDidOpenReviewNotification;
 extern NSString* const iSmartNewsDidOpenCallbackNotification;
@@ -41,6 +41,7 @@ typedef BOOL (^iSmartNewsAllowBlock)(iSmartNews* smartNews);
 @property (nonatomic,copy)                    NSURL*                url;
 
 // if iTunesId is not by developer, then module will try to lookup it using iTunes Lookup API.
+//  This can happen since v4.4.1
 @property (nonatomic,copy)                    NSString*             iTunesId;
 
 /*!

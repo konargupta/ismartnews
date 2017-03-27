@@ -224,8 +224,7 @@
     {
         self.closeButton = [UIButton buttonWithType:UIButtonTypeCustom];
         
-        NSData* data = [NSData dataWithBytes:(([[UIScreen mainScreen] scale] > 1.f)?close2_png:close_png)
-                                      length:(([[UIScreen mainScreen] scale] > 1.f)?close2_png_size():close_png_size())];
+        NSData* data = ([[UIScreen mainScreen] scale] > 1.f)?close2_png_data():close_png_data();
         
         UIImage* image1 = [UIImage imageWithData:data];
         UIImage* image = [UIImage imageWithCGImage:image1.CGImage scale:[[UIScreen mainScreen] scale] orientation:image1.imageOrientation];

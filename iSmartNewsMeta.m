@@ -129,16 +129,16 @@ EXTERN_OR_STATIC INTERNAL_ATTRIBUTES void sn_removeOldMeta(NSString* serviceName
         return YES;
     }]];
     
-    NSFetchRequest* activeItemsRequest = [[NSFetchRequest alloc] init];
-    [activeItemsRequest setEntity:[NSEntityDescription entityForName:@"SmartNewsItem" inManagedObjectContext:context]];
-    [activeItemsRequest setPredicate:[NSPredicate predicateWithFormat:@"NOT (SELF IN %@)", itemsForRemove]];
+    NSFetchRequest* savedItemsRequest = [[NSFetchRequest alloc] init];
+    [savedItemsRequest setEntity:[NSEntityDescription entityForName:@"SmartNewsItem" inManagedObjectContext:context]];
+    [savedItemsRequest setPredicate:[NSPredicate predicateWithFormat:@"NOT (SELF IN %@)", itemsForRemove]];
     
     [itemsForRemove enumerateObjectsUsingBlock:^(id obj, NSUInteger idx, BOOL* stop){
         [context deleteObject:obj];
     }];
     
-    NSArray* itemsActive = [context executeFetchRequest:notActiveItemsRequest error:NULL];
-    [itemsActive enumerateObjectsUsingBlock:^(SmartNewsItem* obj, NSUInteger idx, BOOL* stop){
+    NSArray* itemsSaved = [context executeFetchRequest:savedItemsRequest error:NULL];
+    [itemsSaved enumerateObjectsUsingBlock:^(SmartNewsItem* obj, NSUInteger idx, BOOL* stop){
         
         if ([_activeUuuids containsObject:[obj uuid]])
             obj.notPresented = @(NO);
@@ -1522,6 +1522,12 @@ EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSArray* sn_metaNews(NSString* serviceName,
             {
                 [message setObject:NSLocalizedString(@"Cancel",) forKey:iSmartNewsMessageCancelKey];
             }
+        }
+        //ReviewDomain - one of direct action items
+        else if ([[components host] isEqualToString:smartNewsReviewDomain()])
+        {
+            [message setObject:url forKey:iSmartNewsMessageTextKey];
+            [message setObject:iSmartNewsContentTypeDirectAction forKey:iSmartNewsMessageTypeKey];
         }
         else
         {

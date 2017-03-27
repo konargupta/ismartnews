@@ -81,7 +81,7 @@ NSArray* preprocessEvents(NSString* serviceName, NSArray* input)
     });
     }
 #endif
-    
+
     
     NSManagedObjectContext* context = managedObjectContext(serviceName);
 

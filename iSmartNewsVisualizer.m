@@ -178,11 +178,16 @@
     [self sn_applyScale];
 }
 
+-(void)dealloc
+{
+    iSmartNewsLog(@"SNWebView : %p dealloc", self);
+}
+
 @end
 
 @interface iSmartNewsVisualizer() <UIAlertViewDelegate>
 
-@property (nonatomic,assign,readwrite) BOOL isShown;
+//@property (nonatomic,assign,readwrite) BOOL isShown;
 
 //Popup
 @property (nonatomic,strong) iSmartNewsWindow*                   popupWindow;
@@ -216,6 +221,8 @@ static int gNewsVisualizerInstCounter = 0;
     
     NSURL* _url;
     NSString* _localWeb;
+    
+    BOOL _isDirectAction;
 
     BOOL _showRemoveAdsButton;
     iSmartNewsVisualizerAppearance _appearance;
@@ -399,7 +406,6 @@ static int gNewsVisualizerInstCounter = 0;
         }
         else //(nButtons > 2) || (nButtons == 2 && nativeBehaviour == NO)
         {
-            //
             //Review always at top!
             
             if (review){
@@ -497,10 +503,21 @@ static int gNewsVisualizerInstCounter = 0;
     return self;
 }
 
+- (id)initDirectActionVisualizerWithURL:(NSURL*)url
+{
+    self = [super init];
+    if (self)
+    {
+        _url = url;
+        _isDirectAction = YES;
+    }
+    return self;
+}
+
 - (void)dealloc
 {
     if (_appearance == isnVisualizerAppearancePopup)
-    {        
+    {
         void (^notify)() = ^{
             if (--gNewsVisualizerInstCounter == 0){
                 [[NSNotificationCenter defaultCenter] postNotificationName:@"iSmartNewsDidHideNotification" object:nil];
@@ -521,6 +538,8 @@ static int gNewsVisualizerInstCounter = 0;
     {
         [[NSFileManager defaultManager] removeItemAtPath:_localWeb error:NULL];
     }
+    
+    iSmartNewsLog(@"visualizer : %p dealloc", self);
 }
 
 - (void)hideKeyBoard
@@ -581,17 +600,61 @@ static int gNewsVisualizerInstCounter = 0;
     }
     
     _shown = YES;
-
-    [self setIsShown:YES];
     
     if (_alertView)
     {
+        [self setIsShown:YES]; //Show immediately
         [self postOnShow];
+        
         [self hideKeyBoard];
         [_alertView show];
     }
+    else if (_isDirectAction)
+    {
+        BOOL actionWasStarted = NO;
+        
+        if ([[_url host] isEqualToString:@"review.io"])
+        {
+            NSArray* pathComponents = [[_url pathComponents] filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id  _Nonnull evaluatedObject, NSDictionary<NSString *,id> * _Nullable bindings) {
+                return ![evaluatedObject isEqualToString:@"/"];
+            }]];
+            
+            if ([pathComponents count] >= 1 &&  ([@[@"open"] indexOfObject:[pathComponents firstObject]] != NSNotFound))
+            {
+                NSString* actionType = [pathComponents firstObject];
+                
+                if ([actionType isEqualToString:@"open"])
+                {
+                    NSString* reviewType = [pathComponents count] > 1 ? [pathComponents lastObject] : nil;
+                    NSDictionary* additionalInfo = (reviewType != nil)?@{@"reviewType" : reviewType}:nil;
+                    
+                    actionWasStarted = [[iSmartNewsActions sharedInstance] performAction:iSmartNewsActionReviewOpen item:nil additionalInfo:additionalInfo completionHandler:^(NSString *action, NSDictionary *additionalInfo, BOOL success) {
+                        
+                        if (success)
+                        {
+                            [self callDelegateAndExtendLifeForOneMoreRunloopCycle:@selector(visualizerDidClickOpenReview:)];
+                            [self _notifyAboutClose:@"review"];
+                        }
+                        else
+                        {
+                            [self callDelegateAndExtendLifeForOneMoreRunloopCycle:@selector(visualizerDidFail:)];
+                            [self _notifyAboutClose:@"fail"];
+                        }
+                    }];
+                }
+            }
+        }
+        
+        if (actionWasStarted == NO)//unknown action
+        {
+            [self callDelegateAndExtendLifeForOneMoreRunloopCycle:@selector(visualizerDidFail:)];
+            [self _notifyAboutClose:@"fail"];
+        }
+    }
     else
     {
+        //Web showing with delay for loading
+        
         if ([[[_url absoluteString] pathExtension] isEqualToString:@"zip"])
         {
 #pragma warning repleace deprecated NSURLConnection
@@ -737,7 +800,7 @@ static int gNewsVisualizerInstCounter = 0;
 - (void)_notifyAboutClose:(NSString*)type
 {
     [[NSNotificationQueue defaultQueue] enqueueNotification:[NSNotification notificationWithName:iSmartNewsDidCloseNewsItemNotification
-                                                                                          object:[iSmartNews sharedNews]
+                                                                                          object:[self owner]
                                                                                         userInfo:@{@"uuid":(self.metaUUID?self.metaUUID:@"null"),@"type":type}]
                                                postingStyle:NSPostWhenIdle];
 }
@@ -773,7 +836,7 @@ static int gNewsVisualizerInstCounter = 0;
     }
     
     [[NSNotificationQueue defaultQueue] enqueueNotification:[NSNotification notificationWithName:iSmartNewsDidShowNewsItemNotification
-                                                                                          object:[iSmartNews sharedNews]
+                                                                                          object:[self owner]
                                                                                         userInfo:@{@"uuid":(self.metaUUID?self.metaUUID:@"null")}]
                                                postingStyle:NSPostWhenIdle];
 }
@@ -795,12 +858,16 @@ static int gNewsVisualizerInstCounter = 0;
     if (_presented)
         return;
     
+    iSmartNewsLog(@"visualizer : webViewDidFinishLoad");
+    
     _presented = YES;
     
+    [self setIsShown:YES]; //Really show
     [self postOnShow];
     
     if (_appearance == isnVisualizerAppearancePopup)
     {
+        iSmartNewsLog(@"visualizer : webViewDidFinishLoad : configure popup");
         [self hideKeyBoard];
     
         self.popupViewController = [iSmartNewsPopupViewController new];
@@ -832,7 +899,12 @@ static int gNewsVisualizerInstCounter = 0;
     }
     else if (_appearance == isnVisualizerAppearanceEmbedded)
     {
-        [self.embeddedPanel placeContent:[self contentWebView]];
+        UIView* contentView = [self contentWebView];
+        
+        [self applyEmbeddedStyle];
+        
+        iSmartNewsLog(@"visualizer : webViewDidFinishLoad : place content to embedded %p", contentView);
+        [self.embeddedPanel placeContent:contentView];
     }
     
     [self.contentWebView setScalesPageToFit:YES];
@@ -873,7 +945,9 @@ static int gNewsVisualizerInstCounter = 0;
     if (self.contentWebView != webView)
         return;
     
-    [self setIsShown:NO];
+    iSmartNewsLog(@"visualizer : didFailLoadWithError");
+    
+    [self setIsShown:NO]; //Showing failed
     
     if (!_loaded)
     {
@@ -1129,6 +1203,28 @@ static int gNewsVisualizerInstCounter = 0;
     }
 }
 
+-(void)applyEmbeddedStyle
+{
+    assert(_appearance == isnVisualizerAppearanceEmbedded);
+    
+    id isTransparent = [self.contentWebView stringByEvaluatingJavaScriptFromString:@"transparentBackground"];
+    if ([isTransparent isKindOfClass:[NSString class]] && ![isTransparent isEqualToString:@""]
+        
+        && (
+            [[isTransparent lowercaseString] isEqualToString:@"yes"]
+            || [[isTransparent lowercaseString] isEqualToString:@"true"]
+            || [[isTransparent lowercaseString] isEqualToString:@"on"]
+            || ([(NSString*)isTransparent intValue] != 0)
+            )
+        
+        ){
+        self.contentWebView.opaque = NO;
+        self.contentWebView.backgroundColor = [UIColor clearColor];
+        self.contentWebView.backgroundColor = [UIColor clearColor];
+        [self.embeddedPanel setBackgroundColor:[UIColor clearColor]];
+    }
+}
+
 - (NSURL*)url{
     return _url;
 }
@@ -1281,7 +1377,7 @@ static int gNewsVisualizerInstCounter = 0;
     }
     else
     {
-        NSLog(@"cleanupWebView");
+        iSmartNewsLog(@"visualizer : cleanupWebView");
     }
     
     if (!cleaning){
@@ -1396,9 +1492,11 @@ static int gNewsVisualizerInstCounter = 0;
 
 - (void)disableBadGestureRecognizer:(UIView*)view
 {
+
 }
 
 @end
+
 
 #endif//#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)
 

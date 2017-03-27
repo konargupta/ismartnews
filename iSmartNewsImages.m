@@ -195,12 +195,27 @@ static const UInt8 close2_png[] = {
     0x74,0x75,0xDB,0x2C,0x68,0x12,0xD4,0x08,0x1A,0x50,0x94,0x84,0xA2,0xEC,0x1F,0x01,0x06,0x00,0x21,0x66,0x94,0xE1,0xE6,0x84,0xB7,
     0x60,0x00,0x00,0x00,0x00,0x49,0x45,0x4E,0x44,0xAE,0x42,0x60,0x82};
 
-size_t close_png_size(){
+/*
+size_t close_png_size()
+{
     return sizeof(close_png);
 }
 
 size_t close2_png_size(){
     return sizeof(close2_png);
+}
+*/
+
+NSData* close_png_data()
+{
+    NSData* data = [NSData dataWithBytesNoCopy:(void*)close_png length:sizeof(close_png) freeWhenDone:NO];
+    return data;
+}
+
+NSData* close2_png_data()
+{
+    NSData* data = [NSData dataWithBytesNoCopy:(void*)close2_png length:sizeof(close2_png) freeWhenDone:NO];
+    return data;
 }
 
 #endif//#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)

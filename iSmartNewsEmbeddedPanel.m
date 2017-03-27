@@ -13,8 +13,17 @@
 #import "iSmartNewsEmbeddedPanel.h"
 #import "iSmartNewsInternal.h"
 
-const NSTimeInterval defaultAutoHideInterval = 10.0f;
-const NSTimeInterval minAutoHideInterval     = 10.0f;
+const NSTimeInterval minAutoHideInterval       = 1.0f;
+const NSTimeInterval defaultAutoReloadInterval = 10.0f;
+
+typedef enum : NSInteger
+{
+    isnEmbededPanelInitial   = 0,
+    isnEmbededPanelInLoading = 1,
+    isnEmbededPanelWasLoaded = 2,
+    isnEmbededPanelEmpty     = 3,
+    
+} iSmartNewsEmbeddedPanelState;
 
 @interface iSmartNewsEmbeddedPanel()<iSmartNewsDisplayListDelegate, iSmartNewsVisualizerStateNotificationReceiver>
 @end
@@ -23,6 +32,8 @@ const NSTimeInterval minAutoHideInterval     = 10.0f;
 {
     BOOL _isReady;
     BOOL _isActive;
+    
+    iSmartNewsEmbeddedPanelState _state;
     iSmartNewsDisplayList* _displayList;
     
     NSTimer* _rotationTimer;
@@ -31,6 +42,7 @@ const NSTimeInterval minAutoHideInterval     = 10.0f;
     UIView* _contentView;
     
     NSMutableArray* _currentRotationEvents;
+    NSUInteger      _listedItemsCountForCurrentCycle; //Used for reload: if current cycle are empty - stop, else try loading again
 }
 
 @synthesize delegate;
@@ -40,6 +52,8 @@ const NSTimeInterval minAutoHideInterval     = 10.0f;
 
 -(void)_initInternal
 {
+    _state = isnEmbededPanelInitial;
+    
     _displayList = [[iSmartNewsDisplayList alloc] init];
     [_displayList setVisualizerAppearance:isnVisualizerAppearanceEmbedded];
     [_displayList setVisualizerEmbeddedPanel:self];
@@ -72,9 +86,46 @@ const NSTimeInterval minAutoHideInterval     = 10.0f;
 -(void)dealloc
 {
     [self setActive:NO];
-    [_displayList forceHide];
+    [_displayList hideForceAndClear];
 }
 
+#pragma mark - properties
+-(iSmartNewsDisplayList *)displayList
+{
+    return _displayList;
+}
+
+-(void)setService:(NSString *)service
+{
+    _service = service;
+    [_displayList setService:_service];
+}
+
+-(void)setITunesId:(NSString *)iTunesId
+{
+    _iTunesId = iTunesId;
+}
+
+-(void)setFrame:(CGRect)frame
+{
+    [super setFrame:frame];
+    
+    if (_isActive && _isReady)
+    {
+        CGRect contentViewFrame = [_contentView frame];
+        
+        if (CGSizeEqualToSize(frame.size, contentViewFrame.size) == NO)
+        {
+            contentViewFrame.size   = frame.size;
+            contentViewFrame.origin = CGPointZero;
+            
+            [_contentView setFrame:contentViewFrame];
+            [_contentView setNeedsLayout];
+        }
+    }
+}
+
+#pragma mark - Control
 - (void) setActive:(BOOL)active
 {
     if (_isActive != active)
@@ -110,12 +161,16 @@ const NSTimeInterval minAutoHideInterval     = 10.0f;
     _uuid = uuid;
 }
 
-//Internal
+#pragma mark - Internal Logic
 - (void) newItemsAvailable
 {
+    iSmartNewsLog(@"embeddedPanel : newItemsAvailable");
+    
     if (([_displayList currentNewsMessage] == nil) && ([_displayList remainNewsMessagesCount] == 0))
     {
+        iSmartNewsLog(@"embeddedPanel : newItemsAvailable : force reset current cycle");
         [self invalidateReloadTimer];
+        [_currentRotationEvents removeAllObjects];
     }
     
     [self startRotationIfNeed];
@@ -136,85 +191,99 @@ const NSTimeInterval minAutoHideInterval     = 10.0f;
     if ([self isActive] == NO)
         return;
     
-    iSmartNewsLog(@"startRotationIfNeed");
+    iSmartNewsLog(@"embeddedPanel : startRotationIfNeed");
     
     //Not switch to next message - only dispatch timer
     if ([_displayList remainNewsMessagesCount] > 0)
     {
         if ([_displayList currentNewsMessage] == nil)
         {
-            iSmartNewsLog(@"startRotationIfNeed : show first message");
+            iSmartNewsLog(@"embeddedPanel : startRotationIfNeed : show first message");
             [_displayList showNextMessage];
         }
-        
-        if ([_rotationTimer isValid] == NO)
-        {
-            [self dispatchRotationTimerAccordingShowingMessage];
-        }
+    }
+    else if ([_displayList currentNewsMessage] == nil)
+    {
+        iSmartNewsLog(@"embeddedPanel : startRotationIfNeed : displayList is empty - load new messages");
+        [self startLoadNewMessages];
     }
     else
     {
-        iSmartNewsLog(@"startRotationIfNeed : reload with dispatch timer");
-        [self startLoadNewMessages];
+        iSmartNewsLog(@"embeddedPanel : startRotationIfNeed : news item is shown");
     }
+}
+
+-(BOOL) isCurrentCycleNewsListAreEmpty
+{
+    return (_state != isnEmbededPanelWasLoaded) && ([_displayList remainNewsMessagesCount] == 0) && ([_displayList currentNewsMessage] == nil) && ([_currentRotationEvents count] > 0);
+}
+
+-(BOOL) isCurrentCycleNewsHasEvents
+{
+    return ([_currentRotationEvents count] > 0);
 }
 
 -(void) startLoadNewMessages
 {
-    iSmartNewsLog(@"startLoadNewMessages");
+    iSmartNewsLog(@"embeddedPanel : startLoadNewMessages");
     
-    if (![self reloadTimerIsActive])
+    BOOL canLoad = YES;
+    
+    canLoad = canLoad && ([self reloadTimerIsActive] == NO);
+    canLoad = canLoad && (_state != isnEmbededPanelInLoading);
+    
+    if (canLoad)
     {
-        //Swith event with every load
+        //New cycle
         if ([_currentRotationEvents count] == 0)
         {
+            iSmartNewsLog(@"embeddedPanel : startLoadNewMessages : make new cycle");
             _currentRotationEvents = [_rotationEvents mutableCopy];
+            _listedItemsCountForCurrentCycle = 0;
         }
         
+        //Swith event with every load
         if ([_currentRotationEvents count] > 0)
         {
             _currentEvent = [_currentRotationEvents firstObject];
             [_currentRotationEvents removeObjectAtIndex:0];
+            
+            iSmartNewsLog(@"embeddedPanel : startLoadNewMessages : next message in cycle = \"%@\"", _currentEvent);
         }
         else
         {
+             iSmartNewsLog(@"embeddedPanel : startLoadNewMessages : cycle was empty ...");
             _currentEvent = nil;
         }
         
-        iSmartNewsLog(@"startLoadNewMessages : begin");
+        iSmartNewsLog(@"embeddedPanel : startLoadNewMessages : start reload timer as watchdog");
         //For reload if need
-        [self dispatchReloadTimer];
+        [self redispatchReloadTimer];
         
-        //Force hide after load
-        [_displayList setForceSwitchFlag];
-        //Load new news by event
-        [[self internalDelegate] panelDidCompleteShown:self];
+        _state = isnEmbededPanelInLoading;
+        //Really loading new news by current event
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(_startLoadNewMessages) object:nil];
+        [self performSelector:@selector(_startLoadNewMessages) withObject:nil afterDelay:0.0f];
     }
+    else
+    {
+        iSmartNewsLog(@"embeddedPanel : startLoadNewMessages : skipped by active reload timer");
+    }
+}
+
+-(void) _startLoadNewMessages
+{
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:_cmd object:nil];
     
-    iSmartNewsLog(@"startLoadNewMessages : skip");
-}
-
--(iSmartNewsDisplayList *)displayList
-{
-    return _displayList;
-}
-
--(void)setService:(NSString *)service
-{
-    _service = service;
-    [_displayList setService:_service];
-}
-
--(void)setITunesId:(NSString *)iTunesId
-{
-    _iTunesId = iTunesId;
+    iSmartNewsLog(@"embeddedPanel : _startLoadNewMessages");
+    [[self internalDelegate] panelDidCompleteShown:self];
 }
 
 #pragma mark - Timers
 #pragma mark - Rotation
 -(void) rotationTimerEvent
 {
-    iSmartNewsLog(@"rotationTimerEvent");
+    iSmartNewsLog(@"embeddedPanel : rotationTimerEvent");
     
     [self invalidateRotationTimer];
     
@@ -222,7 +291,7 @@ const NSTimeInterval minAutoHideInterval     = 10.0f;
     
     if ([_displayList remainNewsMessagesCount] > 0)
     {
-        [_displayList forceHide];
+        //[_displayList forceHide];
         [_displayList showNextMessage];
     }
     else
@@ -233,14 +302,14 @@ const NSTimeInterval minAutoHideInterval     = 10.0f;
 
 -(void) invalidateRotationTimer
 {
-    iSmartNewsLog(@"invalidateRotationTimer");
+    iSmartNewsLog(@"embeddedPanel : invalidateRotationTimer");
     [_rotationTimer invalidate];
     _rotationTimer = nil;
 }
 
 -(void) dispatchRotationEventWithPeriod:(NSTimeInterval) period
 {
-    iSmartNewsLog(@"dispatchRotationEventWithPeriod: %2.2f", (float)period);
+    iSmartNewsLog(@"embeddedPanel : dispatchRotationEventWithPeriod: %2.2f", (float)period);
     [_rotationTimer invalidate];
     _rotationTimer = nil;
     
@@ -258,7 +327,7 @@ const NSTimeInterval minAutoHideInterval     = 10.0f;
                  
 - (void) dispatchRotationTimerAccordingShowingMessage
 {
-    iSmartNewsLog(@"dispatchRotationTimerAccordingShowingMessage");
+    iSmartNewsLog(@"embeddedPanel : dispatchRotationTimerAccordingShowingMessage");
 
     NSDictionary* currentMessage = [_displayList currentNewsMessage];
 
@@ -269,26 +338,22 @@ const NSTimeInterval minAutoHideInterval     = 10.0f;
     {
         rotationPeriod = [autoHideIntervalNumber doubleValue];
         rotationPeriod = MAX(rotationPeriod, minAutoHideInterval);
+        
+        [self dispatchRotationEventWithPeriod:rotationPeriod];
     }
-    else
-    {
-        rotationPeriod = defaultAutoHideInterval;
-    }
-
-    [self dispatchRotationEventWithPeriod:rotationPeriod];
 }
 
 #pragma mark - Reload
--(void) dispatchReloadTimer
+-(void) redispatchReloadTimer
 {
-    iSmartNewsLog(@"dispatchReloadTimer");
+    iSmartNewsLog(@"embeddedPanel : redispatchReloadTimer");
     [self invalidateReloadTimer];
-    _reloadTimer = [NSTimer scheduledTimerWithTimeInterval:defaultAutoHideInterval target:self selector:@selector(reloadTimerHandler) userInfo:nil repeats:NO];
+    _reloadTimer = [NSTimer scheduledTimerWithTimeInterval:defaultAutoReloadInterval target:self selector:@selector(reloadTimerHandler) userInfo:nil repeats:NO];
 }
 
 -(void) invalidateReloadTimer
 {
-    iSmartNewsLog(@"invalidateReloadTimer");
+    iSmartNewsLog(@"embeddedPanel : invalidateReloadTimer");
     
     [_reloadTimer invalidate];
     _reloadTimer = nil;
@@ -301,7 +366,7 @@ const NSTimeInterval minAutoHideInterval     = 10.0f;
 
 -(void) reloadTimerHandler
 {
-    iSmartNewsLog(@"reloadTimerHandler");
+    iSmartNewsLog(@"embeddedPanel : reloadTimerHandler");
     
     [_reloadTimer invalidate];
     _reloadTimer = nil;
@@ -313,12 +378,13 @@ const NSTimeInterval minAutoHideInterval     = 10.0f;
 
 -(void)visualizerFinishedShowingMessage:(iSmartNewsVisualizer *)visualizer
 {
+    iSmartNewsLog(@"embeddedPanel : visualizerFinishedShowingMessage : %@", [visualizer metaUUID]);
     [self invalidateRotationTimer];
 }
 
 -(void)visualizerWillShowMessage:(iSmartNewsVisualizer *)visualizer
 {
-    iSmartNewsLog(@"visualizerWillShowMessage");
+    iSmartNewsLog(@"embeddedPanel : visualizerWillShowMessage : %@", [visualizer metaUUID]);
     [self invalidateReloadTimer];
     [self dispatchRotationTimerAccordingShowingMessage];
 }
@@ -332,6 +398,8 @@ const NSTimeInterval minAutoHideInterval     = 10.0f;
     {
         content.frame = [self bounds];
         [self addSubview:content];
+        
+        [content setAutoresizingMask:(UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight)];
         
         [self disableScrollForView:content level:4];
         
@@ -366,28 +434,99 @@ const NSTimeInterval minAutoHideInterval     = 10.0f;
 #pragma mark - Display List delegate
 -(void) displayList:(iSmartNewsDisplayList*) displayList performAction:(iSmartNewsDisplayAction) action item:(NSObject*) item
 {
-    NSLog(@"performAction %d item %@", (int)action, item);
+    NSLog(@"embeddedPanel : performAction %d item %@", (int)action, item);
+}
+
+#pragma mark Loading logic
+
+-(void)displayListWasAssignedNewMessages:(iSmartNewsDisplayList *)displayList
+{
+    if ([displayList isEqual:_displayList] == NO)
+        return;
+    
+    iSmartNewsLog(@"embeddedPanel : displayListWasAssignedNewMessages");
+    [self invalidateReloadTimer];
+
+    _state = isnEmbededPanelWasLoaded;
+    _listedItemsCountForCurrentCycle = _listedItemsCountForCurrentCycle + [_displayList remainNewsMessagesCount];
+    if ([_displayList currentNewsMessage] != nil)
+    {
+        _listedItemsCountForCurrentCycle = _listedItemsCountForCurrentCycle + 1;
+    }
+    
+    assert(_listedItemsCountForCurrentCycle > 0);
+    
+    iSmartNewsLog(@"embeddedPanel : displayListWasAssignedNewMessages : show next message");
+    [_displayList setAllowMultipleAsyncVisualizers];
+    [_displayList showNextMessage];
+}
+
+-(void)displayListNotNewMessagesForAssignment:(iSmartNewsDisplayList*)displayList
+{
+    if ([displayList isEqual:_displayList] == NO)
+        return;
+    
+    iSmartNewsLog(@"embeddedPanel : displayListNotNewMessagesForAssignment");
+    [self invalidateReloadTimer];
+    
+    _state = isnEmbededPanelEmpty;
+    
+    if ([self isCurrentCycleNewsHasEvents])
+    {
+        iSmartNewsLog(@"embeddedPanel : displayListNotNewMessagesForAssignment : try load for next event");
+        [self startLoadNewMessages];
+    }
+    else if (_listedItemsCountForCurrentCycle > 0)
+    {
+        iSmartNewsLog(@"embeddedPanel : displayListNotNewMessagesForAssignment : start new cycle - because previous was successful");
+        [self startLoadNewMessages];
+    }
+    else
+    {
+        
+        iSmartNewsLog(@"embeddedPanel : displayListNotNewMessagesForAssignment : stop cycle and redispatch reload timer");
+        [self redispatchReloadTimer];
+    }
+}
+
+-(void)displayListFailedToShowMessage:(iSmartNewsDisplayList *)displayList
+{
+    iSmartNewsLog(@"embeddedPanel : displayListFailedToShowMessage");
+}
+
+-(void)displayListFailedToShowNextMessage:(iSmartNewsDisplayList *)displayList
+{
+    iSmartNewsLog(@"embeddedPanel : displayListFailedToShowNextMessage");
 }
 
 -(void) displayListWasEnded:(iSmartNewsDisplayList *)displayList
 {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    iSmartNewsLog(@"embeddedPanel : displayListWasEnded : dispatch new load");
         
-        iSmartNewsLog(@"displayListWasEnded : new cycle");
+    if ([_displayList remainNewsMessagesCount] == 0)
+    {
+        iSmartNewsLog(@"embeddedPanel : displayListWasEnded : continue or make new cycle");
         [self startLoadNewMessages];
-    });
+    }
+    else
+    {
+         iSmartNewsLog(@"embeddedPanel : displayListWasEnded : skip reload");
+    }
 }
 
--(void)displayListWasAssignedNewMessages:(iSmartNewsDisplayList *)displayList
+-(BOOL)displayListShouldToReloadCurrentMessage:(iSmartNewsDisplayList *)displayList
 {
-    iSmartNewsLog(@"displayListWasAssignedNewMessages");
+    iSmartNewsLog(@"embeddedPanel : displayListShouldToReloadCurrentMessage : %@", [[displayList visualizer] metaUUID]);
     [self invalidateReloadTimer];
+    [self dispatchRotationTimerAccordingShowingMessage];
+    
+    return NO;
 }
 
-//Shown logic
+#pragma mark Shown logic
 -(iSmartNewsSaveLastShowResult) displayList:(iSmartNewsDisplayList*) displayList markItemIsShown:(NSDictionary*) item info:(NSDictionary*) info
 {
-    NSLog(@"MarkShown item %@  infi %@", item, info);
+    iSmartNewsLog(@"embeddedPanel : markShown item %@ info %@", item, info);
     return iSmartNewsLastShowItemNotFound;
 }
 

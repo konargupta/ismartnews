@@ -104,7 +104,7 @@ __attribute__((always_inline)) __attribute__((visibility("hidden"))) NSURL* _spe
                     storeKitMethod = skNotAvailable;
                 }
             }
-            
+    
             
             if (storeKitMethod != skUsed)
             {
@@ -278,26 +278,67 @@ __attribute__((always_inline)) __attribute__((visibility("hidden"))) NSURL* _spe
     if ([iTunesId length] == 0)
         return nil;
     
+    static NSString* templateURL9PlusAction   = nil;
+    
+    static NSString* templateURL71PlusDefault = nil;
+    static NSString* templateURL9PlusDefault  = nil;
+    
+    if (templateURL9PlusAction == nil || templateURL71PlusDefault == nil || templateURL9PlusDefault == nil)
+    {
+        NSString* schema = @"itms-apps";
+        NSString* type   = @"Purple+Software";
+        
+        NSString* path   = @"/WebObjects/MZStore.woa/wa/viewContentsUserReviews";
+        
+        NSString* host   = @"itunes.apple.com";
+        
+        
+        templateURL9PlusAction   = [[[schema stringByAppendingString:@"://"] stringByAppendingString:host] stringByAppendingString:@"/app/id%@?action=%@"];
+        templateURL71PlusDefault = [[[[[[schema stringByAppendingString:@"://"] stringByAppendingString:host] stringByAppendingString:path] stringByAppendingString:@"?type="] stringByAppendingString:type] stringByAppendingString:@"&id=%@"];
+        
+        NSString* extraParams = [@[@"onlyLatestVersion=true", @"pageNumber=0", @"sortOrdering=1"] componentsJoinedByString:@"&"];
+        templateURL9PlusDefault  = [templateURL71PlusDefault stringByAppendingFormat:@"&%@", extraParams];
+        
+#if DEBUG || ADHOC
+        assert([@"itms-apps://itunes.apple.com/WebObjects/MZStore.woa/wa/viewContentsUserReviews?type=Purple+Software&id=%@" isEqualToString:templateURL71PlusDefault]);
+        
+        assert([@"itms-apps://itunes.apple.com/WebObjects/MZStore.woa/wa/viewContentsUserReviews?type=Purple+Software&id=%@&onlyLatestVersion=true&pageNumber=0&sortOrdering=1" isEqualToString:templateURL9PlusDefault]);
+        assert([@"itms-apps://itunes.apple.com/app/id%@?action=%@" isEqualToString:templateURL9PlusAction]);
+#endif
+    }
+    
     if (STR_SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(@"9.0") && ([action length] > 0))
     {
-        return [NSURL URLWithString:[NSString stringWithFormat:@"itms-apps://itunes.apple.com/app/id%@?action=%@",iTunesId,action]];
+        return [NSURL URLWithString:[NSString stringWithFormat:templateURL9PlusAction,iTunesId,action]];
     }
     else if (STR_SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(@"9.0"))
     {
-        return [NSURL URLWithString:[NSString stringWithFormat:@"itms-apps://itunes.apple.com/WebObjects/MZStore.woa/wa/viewContentsUserReviews?type=Purple+Software&id=%@&onlyLatestVersion=true&pageNumber=0&sortOrdering=1",iTunesId]];
+        return [NSURL URLWithString:[NSString stringWithFormat:templateURL9PlusDefault,iTunesId]];
     }
+
+#if __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_9_0
     else if (STR_SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(@"7.1"))
     {
-        return [NSURL URLWithString:[NSString stringWithFormat:@"itms-apps://itunes.apple.com/WebObjects/MZStore.woa/wa/viewContentsUserReviews?type=Purple+Software&id=%@",iTunesId]];
+        return [NSURL URLWithString:[NSString stringWithFormat:templateURL71PlusDefault,iTunesId]];
     }
     else if (STR_SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(@"7.0"))
     {
         return [NSURL URLWithString:[NSString stringWithFormat:@"http://itunes.apple.com/app/id%@",iTunesId]];
     }
+#endif //#if __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_9_0
+    
+#if __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_7_0
     else
     {
         return [NSURL URLWithString:[NSString stringWithFormat:@"itms-apps://ax.itunes.apple.com/WebObjects/MZStore.woa/wa/viewContentsUserReviews?type=Purple+Software&id=%@",iTunesId]];
     }
+#else
+    else
+    {
+        assert(0);
+        return nil;
+    }
+#endif
 }
 
 @end

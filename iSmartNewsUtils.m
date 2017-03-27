@@ -14,6 +14,8 @@
 #import <CommonCrypto/CommonDigest.h>
 #import <sys/utsname.h>
 
+#import <zlib.h>
+
 #import "iSmartNewsInternal.h"
 
 @implementation NSArray(SmartNews)
@@ -48,6 +50,10 @@
 static NSString* mk_lang    = nil;
 static NSString* mk_country = nil;
 
+static NSString* mk_deviceModel = nil;
+static NSString* mk_simpleDeviceModel = nil;
+static NSString* mk_screenSize = nil;
+
 
 EXTERN_OR_STATIC INTERNAL_ATTRIBUTES BOOL sn_allowUpdate()
 {
@@ -59,8 +65,14 @@ EXTERN_OR_STATIC INTERNAL_ATTRIBUTES void sn_cleanMessageKeysCache(){
     mk_country = nil;
 }
 
-NSString* smartNewsAlertDomain(){
+NSString* smartNewsAlertDomain()
+{
     return @"alertview.io";
+}
+
+NSString* smartNewsReviewDomain()
+{
+    return @"review.io";
 }
 
 NSSet* sn_protectedItems(){
@@ -155,6 +167,120 @@ void clearNewsLang()
     mk_lang = nil;
 }
 
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSString* firstApplicableOSVersionConditionFromKeys(NSArray* keys, NSString* customOSV)
+{
+    NSString* firstApplicableOSVersionConditionFromExistingKeys = nil;
+    //iOS version filtration:
+    //Equal or More - IOS+10, IOS+10.3, IOS+7.1.3
+    //Equal         - IOS=10, IOS10
+    //Less          - IOS-8
+    
+    for (NSString* key in keys)
+    {
+        if ([key rangeOfString:@"IOS" options:NSCaseInsensitiveSearch].location == NSNotFound)
+            continue;
+        
+        NSRange range = [key rangeOfString:@"[Ii][Oo][Ss][=\\+-]{0,1}[\\d\\.]+" options:NSRegularExpressionSearch];
+        if (range.location != NSNotFound)
+        {
+            NSString* currentOSCondition = [key substringWithRange:range];
+            
+            unichar conditionChar = [currentOSCondition characterAtIndex:3];
+            if ((conditionChar != '=') && (conditionChar != '-') && (conditionChar != '+'))
+            {
+                currentOSCondition = [currentOSCondition stringByReplacingCharactersInRange:NSMakeRange(3, 0) withString:@"="];
+                conditionChar = '=';
+            }
+            
+#if !(DEBUG || ADHOC)
+            static
+#endif
+            NSArray* systemVersionComponents = nil;
+            
+            if (systemVersionComponents == nil)
+            {
+#if DEBUG || ADHOC
+                if (customOSV == nil)
+#endif
+                {
+                    customOSV = [[UIDevice currentDevice] systemVersion];
+                }
+                
+                systemVersionComponents = [customOSV componentsSeparatedByString:@"."];
+            }
+            
+            NSString* needVersion = [currentOSCondition substringFromIndex:4];
+            NSArray* needVersionComponents = [needVersion componentsSeparatedByString:@"."];
+            
+            @try
+            {
+                BOOL applicable = YES;
+                for ( NSInteger i = 0;
+                     (i < [needVersionComponents count]) && applicable;
+                     i++)
+                {
+                    NSInteger needVC    = [[needVersionComponents objectAtIndex:i] integerValue];
+                    NSInteger currentVC = ([systemVersionComponents count] > i) ? ([[systemVersionComponents objectAtIndex:i] integerValue]) : 0;
+                    
+                    if (conditionChar == '=')
+                    {
+                        applicable = applicable && (currentVC == needVC);
+                    }
+                    else if (conditionChar == '+')
+                    {
+                        if (currentVC > needVC)
+                            break;
+                        
+                        applicable = applicable && (currentVC >= needVC);
+                    }
+                    else if (conditionChar == '-')
+                    {
+                        if (currentVC < needVC)
+                            break;
+                        
+                        //If last component - more strong condition
+                        if (i == ([needVersionComponents count] - 1))
+                        {
+                            applicable = applicable && (currentVC < needVC);
+                        }
+                        else
+                        {
+                            applicable = applicable && (currentVC <= needVC);
+                        }
+                    }
+                }
+                
+                if (applicable)
+                    firstApplicableOSVersionConditionFromExistingKeys = currentOSCondition;
+            }
+            @catch(NSException* e)
+            {
+                firstApplicableOSVersionConditionFromExistingKeys = nil;
+            }
+            
+            if ([firstApplicableOSVersionConditionFromExistingKeys length] > 0)
+                break;
+        }
+    }
+    
+    return firstApplicableOSVersionConditionFromExistingKeys;
+}
+
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSString* firstApplicableKey(NSArray* availableKeys, NSString* prefix)
+{
+    NSString* applicableOSVersionCondition = firstApplicableOSVersionConditionFromKeys(availableKeys, nil);
+    
+    if ([applicableOSVersionCondition length] > 0)
+    {
+        NSString* key = [prefix stringByAppendingFormat:@"_%@", applicableOSVersionCondition];
+        
+        if ([availableKeys indexOfObject:key] != NSNotFound)
+            return key;
+    }
+    
+    return nil;
+}
+
 /*! @internal */
 id getMessageKey(NSDictionary* _dict, NSString* _key)
 {
@@ -189,26 +315,25 @@ id getMessageKey(NSDictionary* _dict, NSString* _key)
         iSmartNewsLog(@"lang = %@, country = %@",mk_lang,mk_country);
     }
     
-    static NSString* deviceModel = nil;
-    if (!deviceModel)
+    if (!mk_deviceModel)
     {
         struct utsname systemInfo;
         memset(&systemInfo, 0, sizeof(systemInfo));
         uname(&systemInfo);
-        deviceModel = [[NSString stringWithCString:systemInfo.machine
+        mk_deviceModel = [[NSString stringWithCString:systemInfo.machine
                                           encoding:NSUTF8StringEncoding] lowercaseString];
     }
     
-    static NSString* simpleDeviceModel = nil;
-    if (!simpleDeviceModel){
-        simpleDeviceModel = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) ? @"ipad" : @"iphone";
+    
+    if (!mk_simpleDeviceModel){
+        mk_simpleDeviceModel = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) ? @"ipad" : @"iphone";
     }
     
-    static NSString* screenSize = nil;
-    if (!screenSize){
+
+    if (!mk_screenSize){
         
-        if ([deviceModel isEqualToString:@"ipad6,8"]){ // hack
-            screenSize = @"2048x2732";
+        if ([mk_deviceModel isEqualToString:@"ipad6,8"]){ // hack
+            mk_screenSize = @"2048x2732";
         }
         else {
             const CGRect bounds = [[UIScreen mainScreen] bounds];
@@ -216,52 +341,125 @@ id getMessageKey(NSDictionary* _dict, NSString* _key)
             const int w = MIN((int)(scale * bounds.size.width),(int)(bounds.size.height * scale));
             const int h = MAX((int)(scale * bounds.size.width),(int)(bounds.size.height * scale));
             
-            screenSize = [NSString stringWithFormat:@"%dx%d",w,h];
+            mk_screenSize = [NSString stringWithFormat:@"%dx%d",w,h];
         }
     }
     
     NSObject* retVal = nil;
     
-    // try to get variant for full locale + size
-    if (deviceModel && !retVal)
-        retVal = [_dict objectForKey:[_key stringByAppendingFormat:@"_%@_%@_%@",mk_lang,mk_country,deviceModel]];
+#define KEYS_WITH_PREFIX(PREFIX) [[_dict allKeys] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF BEGINSWITH %@", (PREFIX)]]
     
-    if (simpleDeviceModel && !retVal)
-        retVal = [_dict objectForKey:[_key stringByAppendingFormat:@"_%@_%@_%@",mk_lang,mk_country,simpleDeviceModel]];
+    //NSArray* keyCandidats = [[_dict allKeys] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF BEGINSWITH %@", _key]];
+    //NSString* mk_osversion = firstApplicableOSVersionConditionFromKeys(keyCandidats, nil);
+    
+    // try to get variant for full locale + size
+    if (mk_deviceModel && !retVal)
+        retVal = [_dict objectForKey:[_key stringByAppendingFormat:@"_%@_%@_%@",mk_lang,mk_country,mk_deviceModel]];
+    
+    if (mk_simpleDeviceModel && !retVal)
+        retVal = [_dict objectForKey:[_key stringByAppendingFormat:@"_%@_%@_%@",mk_lang,mk_country,mk_simpleDeviceModel]];
     
     // try to get variant for full locale + size
     if (!retVal)
-        retVal = [_dict objectForKey:[_key stringByAppendingFormat:@"_%@_%@_%@",mk_lang,mk_country,screenSize]];
+        retVal = [_dict objectForKey:[_key stringByAppendingFormat:@"_%@_%@_%@",mk_lang,mk_country,mk_screenSize]];
     
     // try to get variant for full locale
     if (!retVal)
         retVal = [_dict objectForKey:[_key stringByAppendingFormat:@"_%@_%@",mk_lang,mk_country]];
     
-    // try to get variant for language + size
-    if (deviceModel && !retVal)
-        retVal = [_dict objectForKey:[_key stringByAppendingFormat:@"_%@_%@",mk_lang,deviceModel]];
     
-    if (simpleDeviceModel && !retVal)
-        retVal = [_dict objectForKey:[_key stringByAppendingFormat:@"_%@_%@",mk_lang,simpleDeviceModel]];
+    
+    if (mk_deviceModel && !retVal)
+    {
+        NSString* keyPrefix     = [_key stringByAppendingFormat:@"_%@_%@",mk_lang,mk_deviceModel];
+        NSArray*  availableKeys = KEYS_WITH_PREFIX(keyPrefix);
+        if ([availableKeys count] > 0)
+        {
+            NSString* key2 = firstApplicableKey(availableKeys, keyPrefix);
+            retVal = [_dict objectForKey:(key2!=nil)?(key2):(keyPrefix)];
+        }
+    }
+    
+    if (mk_simpleDeviceModel && !retVal)
+    {
+        NSString* keyPrefix     = [_key stringByAppendingFormat:@"_%@_%@",mk_lang,mk_simpleDeviceModel];
+        NSArray*  availableKeys = KEYS_WITH_PREFIX(keyPrefix);
+        if ([availableKeys count] > 0)
+        {
+            NSString* key2 = firstApplicableKey(availableKeys, keyPrefix);
+            retVal = [_dict objectForKey:(key2!=nil)?(key2):(keyPrefix)];
+        }
+    }
     
     // try to get variant for language + size
     if (!retVal)
-        retVal = [_dict objectForKey:[_key stringByAppendingFormat:@"_%@_%@",mk_lang,screenSize]];
+    {
+        NSString* keyPrefix     = [_key stringByAppendingFormat:@"_%@_%@",mk_lang,mk_screenSize];
+        NSArray*  availableKeys = KEYS_WITH_PREFIX(keyPrefix);
+        if ([availableKeys count] > 0)
+        {
+            NSString* key2 = firstApplicableKey(availableKeys, keyPrefix);
+            retVal = [_dict objectForKey:(key2!=nil)?(key2):(keyPrefix)];
+        }
+    }
     
     // try to get variant for language
     if (!retVal)
-        retVal = [_dict objectForKey:[_key stringByAppendingFormat:@"_%@",mk_lang]];
+    {
+        NSString* keyPrefix     = [_key stringByAppendingFormat:@"_%@",mk_lang];
+        NSArray*  availableKeys = KEYS_WITH_PREFIX(keyPrefix);
+        if ([availableKeys count] > 0)
+        {
+            NSString* key2 = firstApplicableKey(availableKeys, keyPrefix);
+            retVal = [_dict objectForKey:(key2!=nil)?(key2):(keyPrefix)];
+        }
+    }
     
-    // try to get variant for size
-    if (deviceModel && !retVal)
-        retVal = [_dict objectForKey:[_key stringByAppendingFormat:@"_%@",deviceModel]];
+    if (mk_deviceModel && !retVal)
+    {
+        NSString* keyPrefix     = [_key stringByAppendingFormat:@"_%@",mk_deviceModel];
+        NSArray*  availableKeys = KEYS_WITH_PREFIX(keyPrefix);
+        if ([availableKeys count] > 0)
+        {
+            NSString* key2 = firstApplicableKey(availableKeys, keyPrefix);
+            retVal = [_dict objectForKey:(key2!=nil)?(key2):(keyPrefix)];
+        }
+    }
     
-    if (simpleDeviceModel && !retVal)
-        retVal = [_dict objectForKey:[_key stringByAppendingFormat:@"_%@",simpleDeviceModel]];
+    if (mk_simpleDeviceModel && !retVal)
+    {
+        NSString* keyPrefix     = [_key stringByAppendingFormat:@"_%@",mk_simpleDeviceModel];
+        NSArray*  availableKeys = KEYS_WITH_PREFIX(keyPrefix);
+        if ([availableKeys count] > 0)
+        {
+            NSString* key2 = firstApplicableKey(availableKeys, keyPrefix);
+            retVal = [_dict objectForKey:(key2!=nil)?(key2):(keyPrefix)];
+        }
+    }
     
     // try to get variant for size
     if (!retVal)
-        retVal = [_dict objectForKey:[_key stringByAppendingFormat:@"_%@",screenSize]];
+    {
+        NSString* keyPrefix     = [_key stringByAppendingFormat:@"_%@",mk_screenSize];
+        NSArray*  availableKeys = KEYS_WITH_PREFIX(keyPrefix);
+        if ([availableKeys count] > 0)
+        {
+            NSString* key2 = firstApplicableKey(availableKeys, keyPrefix);
+            retVal = [_dict objectForKey:(key2!=nil)?(key2):(keyPrefix)];
+        }
+    }
+    
+    //Only for iOS version
+    if (!retVal)
+    {
+        NSString* keyPrefix     = _key;
+        NSArray*  availableKeys = KEYS_WITH_PREFIX([keyPrefix stringByAppendingString:@"_"]); //Special for exclude keys without suffix
+        if ([availableKeys count] > 0)
+        {
+            NSString* key2 = firstApplicableKey(availableKeys, keyPrefix);
+            retVal = [_dict objectForKey:(key2!=nil)?(key2):(keyPrefix)];
+        }
+    }
     
     // peek default
     if (!retVal)
@@ -708,6 +906,184 @@ EXTERN_OR_STATIC void sn_swizzleInstanceMethod(Class class, SEL old, SEL newSele
     return resultArray;
 }
 
+#if DEBUG || ADHOC
++(void)load
+{
+    //Tests
+    
+    NSArray* keysTest1 = @[@"urls_ru_ios=7", @"urls_ru_ios=7.3.1", @"urls_ru_ios+10", @"urls_ru_ios+10.3", @"urls_ru_ios+9.3", @"urls_ru_ios-9.0", @"urls_ru_ios-8.1", @"urls_ru_ios-8.0"];
+    
+    NSArray* keysTest2 = @[@"urls_ru_ios=7.3.1", @"urls_ru_ios+10.3", @"urls_ru_ios+9.3", @"urls_ru_ios-8.0", @"urls_ru_ios-9.0"];
+    
+    NSArray* keysTest3 = @[@"urls_ru_ios-7.3.1", @"urls_ru_ios-9.3.5", @"urls_ru_ios-10.3.2"];
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest1, @"7.1");
+        assert([result isEqualToString:@"ios=7"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest1, @"7.3.1");
+        assert([result isEqualToString:@"ios=7"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest2, @"7.3.1");
+        assert([result isEqualToString:@"ios=7.3.1"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest1, @"8.0");
+        assert([result isEqualToString:@"ios-9.0"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest1, @"8.1");
+        assert([result isEqualToString:@"ios-9.0"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest1, @"7.2");
+        assert([result isEqualToString:@"ios=7"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest2, @"7.2");
+        assert([result isEqualToString:@"ios-8.0"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest2, @"8.0");
+        assert([result isEqualToString:@"ios-9.0"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest1, @"10.0");
+        assert([result isEqualToString:@"ios+10"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest1, @"10.1");
+        assert([result isEqualToString:@"ios+10"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest1, @"10.3");
+        assert([result isEqualToString:@"ios+10"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest2, @"10.2");
+        assert([result isEqualToString:@"ios+9.3"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest2, @"10.3");
+        assert([result isEqualToString:@"ios+10.3"]);
+    }
+    
+    //Strong conditions
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest3, @"10.3");
+        assert([result isEqualToString:@"ios-10.3.2"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest3, @"10.3.1");
+        assert([result isEqualToString:@"ios-10.3.2"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest3, @"10.3.2");
+        assert(result == nil);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest3, @"9.3.5");
+        assert([result isEqualToString:@"ios-10.3.2"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest3, @"9.3.4");
+        assert([result isEqualToString:@"ios-9.3.5"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest3, @"7.3.2");
+        assert([result isEqualToString:@"ios-9.3.5"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest3, @"7.3.1");
+        assert([result isEqualToString:@"ios-9.3.5"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest3, @"7.3.0");
+        assert([result isEqualToString:@"ios-7.3.1"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest3, @"7.3");
+        assert([result isEqualToString:@"ios-7.3.1"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest3, @"7.2");
+        assert([result isEqualToString:@"ios-7.3.1"]);
+    }
+    
+    {
+        NSString* result = firstApplicableOSVersionConditionFromKeys(keysTest3, @"7");
+        assert([result isEqualToString:@"ios-7.3.1"]);
+    }
+    
+    iSmartNewsLog(@"Test IOS version filration - successfully");
+    
+    getMessageKey(@{}, @""); //Initialization of variables
+    
+    NSString* keyBasic           = @"test";
+    NSString* keyDev             = [keyBasic stringByAppendingFormat:@"_%@",    mk_deviceModel];
+    NSString* keyLang            = [keyBasic stringByAppendingFormat:@"_%@",    mk_lang];
+    NSString* keyLangScreensize  = [keyBasic stringByAppendingFormat:@"_%@_%@", mk_lang, mk_screenSize];
+    NSString* keyLangDev         = [keyBasic stringByAppendingFormat:@"_%@_%@", mk_lang, mk_deviceModel];
+    
+    NSString* osvConditionTrue  = [NSString stringWithFormat:@"ios+%@", [[UIDevice currentDevice] systemVersion]];
+    NSString* osvConditionFalse = [NSString stringWithFormat:@"ios-%@", [[UIDevice currentDevice] systemVersion]];
+    
+    NSMutableDictionary* dict = [NSMutableDictionary new];
+    NSArray* validKeys = @[keyBasic, keyDev, keyLang, keyLangScreensize, keyLangDev];
+    
+    NSUInteger v = 0;
+    for (NSString* key in validKeys)
+    {
+        NSNumber* r = nil;
+        
+        v++;
+        [dict setObject:@(v) forKey:key];
+        r = getMessageKey(dict, keyBasic);
+        
+        assert([r unsignedIntegerValue] == v);
+        
+        v++;
+        NSString* keyWithFalseIOS = [key stringByAppendingFormat:@"_%@", osvConditionFalse];
+        [dict setObject:@(v) forKey:keyWithFalseIOS];
+        r = getMessageKey(dict, keyBasic);
+        
+        assert([r unsignedIntegerValue] == (v-1));
+        
+        v++;
+        NSString* keyWithTrueIOS = [key stringByAppendingFormat:@"_%@", osvConditionTrue];
+        [dict setObject:@(v) forKey:keyWithTrueIOS];
+        r = getMessageKey(dict, keyBasic);
+        
+        assert([r unsignedIntegerValue] == v);
+    }
+    
+    iSmartNewsLog(@"Test IOS version filration with othes keys - successfully");
+}
+#endif
+
 @end
 
 
@@ -768,6 +1144,59 @@ NSString* stringFromNSURLComponents(NSURLComponents* components)
             stringByAddingPercentEncodingWithAllowedCharacters:
             allowed];
 }
+@end
+
+@implementation SNUUID
+{
+    uint8_t _currentValue[sizeof(uuid_t) + sizeof(uint64_t)];
+}
+
++(instancetype) sharedInstance
+{
+    static SNUUID* sharedInstance = nil;
+    if (sharedInstance == nil)
+    {
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            
+            sharedInstance = [SNUUID new];
+        });
+    }
+    return sharedInstance;
+}
+
+-(instancetype)init
+{
+    self = [super init];
+    if (self)
+    {
+        uuid_t bytes;
+        [[NSUUID new] getUUIDBytes:bytes];
+        
+        memset(&_currentValue[0], 0,     sizeof(_currentValue));
+        memcpy(&_currentValue[0], bytes, sizeof(uuid_t));
+    }
+    return self;
+}
+
+-(NSString*) shortIUID //InternalUseIdentifier
+{
+    uint64_t* varp = (uint64_t*)((&_currentValue[0]) + sizeof(uuid_t));
+    
+    (*varp)++;
+    
+    uLong crc32Value = crc32(0, &_currentValue[0], sizeof(_currentValue));
+    
+    NSString* crc32HexValue = [[NSString stringWithFormat:@"%08lx", crc32Value] uppercaseString];
+    
+    return crc32HexValue;
+}
+
++(NSString*) shortIUID
+{
+    return [[self sharedInstance] shortIUID];
+}
+
 @end
 
 #endif//#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)

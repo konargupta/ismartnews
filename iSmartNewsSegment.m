@@ -13,8 +13,6 @@
 #import "iSmartNewsSegment.h"
 #import "iSmartNewsInternal.h"
 
-
-
 static NSString* const LastFetchDateKey = @"ISNSDLFD";
 static NSString* const LastFetchDateSourceURLKey = @"ISNSDLFDSU";
 static NSString* const SegmentsKey = @"ISNSDCS";
@@ -178,7 +176,6 @@ static NSString* const DefaultSourceUrlKey = @"ISNSDSDU";
 
 - (NSString*)nuid
 {
-
     return nil;
 }
 

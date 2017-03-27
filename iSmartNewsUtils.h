@@ -60,3 +60,8 @@ EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSString* _Nonnull sn_md5ForDictionary(NSDi
 @interface NSString (iSmartNews)
 - (NSString* _Nullable)sn_stringByAddingPercentEncodingForRFC3986;
 @end
+
+
+@interface SNUUID : NSObject
++(NSString*_Nonnull) shortIUID;
+@end

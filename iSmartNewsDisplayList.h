@@ -7,6 +7,9 @@
 #import <Foundation/Foundation.h>
 #import "iSmartNewsInternal.h"
 
+extern NSString* const envQueuesTimeoutsKey;
+extern NSString* const envGateKey;
+
 @class iSmartNewsDisplayList;
 
 @protocol iSmartNewsDisplayListDelegate <NSObject>
@@ -17,7 +20,14 @@
 
 @optional
 -(void) displayListWasEnded:(iSmartNewsDisplayList*) displayList;
+
 -(void) displayListWasAssignedNewMessages:(iSmartNewsDisplayList*) displayList;
+-(void) displayListNotNewMessagesForAssignment:(iSmartNewsDisplayList*) displayList;
+
+-(void) displayListFailedToShowMessage:(iSmartNewsDisplayList*) displayList;
+-(void) displayListFailedToShowNextMessage:(iSmartNewsDisplayList*) displayList;
+
+-(BOOL) displayListShouldToReloadCurrentMessage:(iSmartNewsDisplayList*) displayList;
 
 @required
 //Shown logic
@@ -45,10 +55,11 @@
 @property (nonatomic, assign, readonly) NSUInteger remainNewsMessagesCount;
 
 - (void)assignNews:(NSArray*) news enveronment:(NSDictionary*) enveronment;
-- (void)resetEndedFlag;
-- (void)setForceSwitchFlag;
 
-- (void)forceHide;
+- (void)resetEndedFlag;
+- (void)hideForceAndClear;
+
 - (void)showNextMessage;
+- (void)setAllowMultipleAsyncVisualizers;
 
 @end
