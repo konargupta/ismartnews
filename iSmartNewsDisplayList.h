@@ -29,6 +29,8 @@ extern NSString* const envGateKey;
 
 -(BOOL) displayListShouldToReloadCurrentMessage:(iSmartNewsDisplayList*) displayList;
 
+-(BOOL)displayList:(iSmartNewsDisplayList*) displayList shouldSendCallbackNotificationWithUserInfo:(NSDictionary*) userInfo;
+
 @required
 //Shown logic
 -(iSmartNewsSaveLastShowResult) displayList:(iSmartNewsDisplayList*) displayList markItemIsShown:(NSDictionary*) item info:(NSDictionary*) info;

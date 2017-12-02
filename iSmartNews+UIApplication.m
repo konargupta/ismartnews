@@ -15,7 +15,8 @@
 
 @implementation UIApplication(iSmartNews)
 
-- (BOOL)original_isStatusBarHidden{
+- (BOOL)original_isStatusBarHidden
+{
     NSNumber* num = objc_getAssociatedObject(self, &iSmartNews_hideStatusbar_originalKey);
     if (num == nil)
     {
@@ -25,7 +26,8 @@
     return [num boolValue];
 }
 
-- (void)iSmartNews_hideStatusbar:(BOOL)iSmartNews_hideStatusbar animated:(BOOL)animated{
+- (void)iSmartNews_hideStatusbar:(BOOL)iSmartNews_hideStatusbar animated:(BOOL)animated
+{
     if ([objc_getAssociatedObject(self, &iSmartNews_hideStatusbarKey) boolValue] == iSmartNews_hideStatusbar)
         return;
     

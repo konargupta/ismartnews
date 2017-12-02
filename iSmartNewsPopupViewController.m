@@ -127,6 +127,17 @@
         [_panel setMargin:UIEdgeInsetsZero];
         [_panel setBorderWidth:0];
         [self.view addSubview:_panel];
+        
+        [_panel setHideAnimationTarget:self];
+        [_panel setHideAnimationAction:@selector(panelWillDisappear:)];
+    }
+}
+
+- (void)panelWillDisappear:(iSmartNewsModalPanel*)panel
+{
+    if ([panel isEqual:_panel])
+    {
+        [self restoreStatusBar:NO];
     }
 }
 
@@ -141,8 +152,9 @@
 {
     [super viewWillAppear:animated];
     [self.navigationController setNavigationBarHidden:YES];
-    
-    if (!_statusBarHooked){
+
+    if (!_statusBarHooked)
+    {
         _statusBarHooked = YES;
         [[UIApplication sharedApplication] iSmartNews_hideStatusbar:YES animated:animated];
     }
@@ -159,11 +171,19 @@
     _panel.customAnimation = self.customAnimation;
     _panel.removeAdsPosition = self.removeAdsPosition;
     
-    if (self.disableBuiltinAnimations){
+    if (self.disableBuiltinAnimations)
+    {
         [_panel showImmediately];
     }
-    else {
+    else
+    {
         [_panel showFromPoint:CGPointMake(_panel.superview.bounds.size.width/2, _panel.superview.bounds.size.height/2)];
+        
+        if (!_statusBarHooked)
+        {
+            _statusBarHooked = YES;
+            [[UIApplication sharedApplication] iSmartNews_hideStatusbar:YES animated:YES];
+        }
     }
     
     dispatch_async(dispatch_get_main_queue(), ^{

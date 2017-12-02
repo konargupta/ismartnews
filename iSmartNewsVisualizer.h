@@ -23,6 +23,10 @@
 - (void)visualizerDidClickRemoveAds:(iSmartNewsVisualizer*)visualizer;
 
 - (void)visualizerDidFail:(iSmartNewsVisualizer*)visualizer;
+
+#pragma mark - FixMe!
+- (NSString*)     isCallBackURL:(NSURL*) url;
+- (NSDictionary*) makeUserInfoForCallBackURL:(NSURL*) url callType:(NSString*) callType uuid:(NSString*) uuid;
 @end
 
 @protocol iSmartNewsVisualizerStateNotificationReceiver <NSObject>
@@ -33,7 +37,7 @@
 
 typedef enum : NSInteger
 {
-    isnVisualizerAppearancePopup   = 0,
+    isnVisualizerAppearancePopup    = 0,
     isnVisualizerAppearanceEmbedded = 1,
     
 } iSmartNewsVisualizerAppearance;
@@ -42,7 +46,7 @@ typedef void (^iSmartNewsVisualizerShownBlock)();
 
 @interface iSmartNewsVisualizer : NSObject
 
-@property (nonatomic,assign,readonly) BOOL isShown;
+@property (nonatomic,assign,readonly) BOOL isPresented;
 
 @property (nonatomic,copy) NSString* metaUUID;
 
@@ -57,11 +61,15 @@ typedef void (^iSmartNewsVisualizerShownBlock)();
 @property (nonatomic,weak) id<iSmartNewsVisualizerDelegate> delegate;
 @property (nonatomic,weak) id<iSmartNewsVisualizerStateNotificationReceiver> stateNotificationReceiver;
 
+@property (nonatomic,copy) NSDictionary* appearanceStyle;
+
 - (NSURL*)url;
 
 //- (id)initAlertViewVisualizerWithTitle:(NSString*)title message:(NSString*)message cancel:(NSString*)cancel ok:(NSString*)ok review:(NSString*)review remind:(NSString*)remind;
+
 - (id)initAlertViewVisualizerWithDescription:(NSDictionary*) description;
 - (id)initWebViewVisualizerWithURL:(NSURL*)url showRemoveAdsButton:(BOOL)showRemoveAdsButton;
+
 - (id)initDirectActionVisualizerWithURL:(NSURL*)url;
 
 - (void)showWithDelayRange:(NSRange) delayRange;

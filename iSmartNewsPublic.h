@@ -53,6 +53,12 @@ typedef NS_ENUM(NSInteger, iSmartNewsDisplayAction)
     iSmartNewsDisplayActionRemoveAdsApplication    = 2,
 };
 
+typedef NS_ENUM(NSInteger, iSmartNewsContentStatus)
+{
+    iSmartNewsContentLoading = 0,
+    iSmartNewsContentReady   = 1,
+};
+
 @protocol iSmartNewsPanelDelegate;
 
 
@@ -64,7 +70,10 @@ typedef NS_ENUM(NSInteger, iSmartNewsDisplayAction)
 @property (nonatomic, readonly, assign) BOOL isReady;
 @property (nonatomic, readonly, assign) BOOL isActive;
 
+@property (nonatomic, readonly, assign) iSmartNewsContentStatus status;
+
 -(void) placeContent:(UIView*) content;
+-(void) placeContent:(UIView*) content status:(iSmartNewsContentStatus) status;
 -(void) setActive:(BOOL) active;
 
 @end
@@ -75,6 +84,8 @@ typedef NS_ENUM(NSInteger, iSmartNewsDisplayAction)
 
 - (void)panel:(UIView<iSmartNewsPanelProtocol>*)panel didCloseWithType:(iSmartNewsPanelCloseType)type;
 - (void)panelDidChangeStatus:(UIView<iSmartNewsPanelProtocol>*)panel;
+
+- (BOOL)shouldSendCallbackNotificationWithUserInfo:(NSDictionary*) userInfo;
 
 @end
 

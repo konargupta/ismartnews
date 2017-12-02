@@ -46,6 +46,9 @@ NSString* const envGateKey           = @"gate";
     
     BOOL _listWasEnded;
     BOOL _allowMultipleAsyncVisualizers;
+    
+    NSString*  _lastFailedUUID;
+    NSUInteger _lastFailedCount;
 }
 
 -(instancetype)init
@@ -337,6 +340,12 @@ NSString* const envGateKey           = @"gate";
     {
         NSDictionary* description = [self extractNextMessage];
         
+        if ([_lastFailedUUID isEqualToString:[description objectForKey:@"uuid"]] != YES)
+        {
+            _lastFailedUUID = nil;
+            _lastFailedCount = 0;
+        }
+        
         iSmartNewsLog(@"checking message: %@",description);
         
         //continue - will remove current message from loadedNews_
@@ -365,7 +374,7 @@ NSString* const envGateKey           = @"gate";
         
         NSMutableDictionary* alertViewDescription = [NSMutableDictionary new];
         
-        for (NSString* key in @[iSmartNewsMessageTitleKey, iSmartNewsMessageTextKey, iSmartNewsMessageCancelKey, iSmartNewsMessageActionKey, iSmartNewsMessageReviewKey, iSmartNewsMessageUrlKey, iSmartNewsMessageRemindKey, iSmartNewsMessageReviewTypeKey])
+        for (NSString* key in @[iSmartNewsMessageTitleKey, iSmartNewsMessageTextKey, iSmartNewsMessageCancelKey, iSmartNewsMessageActionKey, iSmartNewsMessageReviewKey, iSmartNewsMessageUrlKey, iSmartNewsMessageRemindKey, iSmartNewsMessageReviewTypeKey, iSmartNewsMessageStyleKey])
         {
             NSString* value = [description objectForKey:key];
             if (value != nil)
@@ -487,47 +496,8 @@ NSString* const envGateKey           = @"gate";
             SmartNewsItem* metaItem = sn_findMetaItem(self.service, uuid);
             if (metaItem)
             {
-                if ([[metaItem valueForKey:@"sequenceSrc"] length] > 0)
-                {
-                    NSArray* s = [[metaItem valueForKey:@"sequence"] componentsSeparatedByString:@"|"];
-                    if ([s count] > 1)
-                    {
-                        NSString* ns = [[s subarrayWithRange:NSMakeRange(1, [s count] - 1)] componentsJoinedByString:@"|"];
-                        [metaItem setValue:ns forKey:@"sequence"];
-                        
-                        iSmartNewsLog(@"sequence updated to %@", [metaItem valueForKey:@"sequence"]);
-                    }
-                    else
-                    {
-                        [metaItem setValue:[metaItem valueForKey:@"sequenceSrc"] forKey:@"sequence"];
-                        [metaItem setValue:[metaItem valueForKey:@"urlsSrc"] forKey:@"urls"];
-                        
-                        iSmartNewsLog(@"sequence reset to %@", [metaItem valueForKey:@"sequence"]);
-                        
-                        if ([[metaItem randomize] boolValue]){
-                            [metaItem randomizeUrlsAndSequence];
-                            
-                            iSmartNewsLog(@"sequence/urls randomized to %@/%@ ", [metaItem valueForKey:@"sequence"], [metaItem valueForKey:@"urls"]);
-                        }
-                    }
-                }
-                else
-                {
-                    NSArray* urls = [[metaItem valueForKey:@"urls"] componentsSeparatedByString:@"!!!"];
-                    NSUInteger nextUrlIndex = (NSUInteger)[[metaItem valueForKey:@"urlIndex"] intValue] + 1;
-                    if (nextUrlIndex >= [urls count])
-                    {
-                        nextUrlIndex = 0;
-                        
-                        if ([[metaItem randomize] boolValue])
-                        {
-                            [metaItem randomizeUrlsAndSequence];
-                            iSmartNewsLog(@"sequence/urls randomized to %@/%@ ", [metaItem valueForKey:@"sequence"], [metaItem valueForKey:@"urls"]);
-                        }
-                    }
-                    [metaItem setValue:@(nextUrlIndex) forKey:@"urlIndex"];
-                }
-                
+                [metaItem gotoNextUrl];
+            
                 saveContext(self.service);
                 
                 NSDate* shownDate = [NSDate ism_date];
@@ -558,7 +528,7 @@ NSString* const envGateKey           = @"gate";
             }
         }
         
-        if (_allowMultipleAsyncVisualizers && (_currentNewsMessage != nil) && (_visualizer != nil) && [_visualizer isShown])
+        if (_allowMultipleAsyncVisualizers && (_currentNewsMessage != nil) && (_visualizer != nil) && [_visualizer isPresented])
         {
             if ([_currentNewsMessage isEqual:description])
             {
@@ -601,6 +571,18 @@ NSString* const envGateKey           = @"gate";
         }
         
         isFirst_ = NO;
+        
+        NSDictionary* style = [description objectForKey:iSmartNewsMessageStyleKey];
+        
+        if ([style isKindOfClass:[NSString class]])
+        {
+            style = [NSDictionary dictionaryFromFlatLine:(NSString*)style optionAliases:@"anim:animation_bg:backround_ind:indicator"];
+        }
+        
+        if ([style count] > 0)
+        {
+            _nextVisualizer.appearanceStyle = style;
+        }
         
         iSmartNewsLog(@"diplayList : showNextMessage : visualizer %p was maked", _nextVisualizer);
         
@@ -771,11 +753,26 @@ NSString* const envGateKey           = @"gate";
     NSString* urlString = [message objectForKey:iSmartNewsMessageUrlKey];
     if (urlString)
     {
-        iSmartNewsLog(@"Opening URL: %@",urlString);
         NSURL* url = [NSURL URLWithString:urlString];
-        if (url){
-            if ([[UIApplication sharedApplication] canOpenURL:url]){
-                [[UIApplication sharedApplication] openURL:url];
+        
+        if (url)
+        {
+            NSString* callBackType = [self isCallBackURL:url];
+            if ([callBackType length] > 0)
+            {
+                NSString* uuid = [message objectForKey:@"uuid"];
+                NSDictionary* userInfo = [self makeUserInfoForCallBackURL:url callType:nil uuid:uuid];
+                
+                [self _sendCallBackWithUserInfo:userInfo];
+            }
+            else
+            {
+                iSmartNewsLog(@"Opening URL: %@",urlString);
+                
+                if ([[UIApplication sharedApplication] canOpenURL:url])
+                {
+                    [[UIApplication sharedApplication] openURL:url];
+                }
             }
         }
     }
@@ -794,6 +791,46 @@ NSString* const envGateKey           = @"gate";
     [self showNextMessage];
 }
 
+#pragma mark - FixMe!
+-(NSString*) isCallBackURL:(NSURL*) url
+{
+    NSString* callType = nil;
+    
+    NSString* scheme = [[url scheme] lowercaseString];
+    NSString* host   = [[url host] lowercaseString];
+    
+    if ([scheme hasPrefix:@"callback"] || [host isEqualToString:@"callback.io"])
+    {
+        callType = @"callback";
+    }
+    else if ([scheme hasPrefix:@"callquietly"] || [host isEqualToString:@"callquietly.io"])
+    {
+        callType = @"callquietly";
+    }
+    
+    return callType;
+}
+
+- (NSDictionary*) makeUserInfoForCallBackURL:(NSURL*) url callType:(NSString*) callType uuid:(NSString*) uuid
+{
+    NSString* requestURLString = nil;
+    @try
+    {
+        requestURLString = [url absoluteString];
+        
+    }
+    @catch(NSException* e)
+    {
+        requestURLString = nil;
+    }
+    
+    NSDictionary* userInfo = @{
+                               @"url"  :   (requestURLString?requestURLString:@"null"),
+                               @"uuid" :   (uuid?uuid:@"null"),
+                               @"type" :   (callType?callType:@"unknown"),
+                               };
+    return userInfo;
+}
 
 #pragma mark -
 #pragma mark iSmartNewsVisualizerStateNotificationReceiver - proxy
@@ -851,6 +888,16 @@ NSString* const envGateKey           = @"gate";
         return;
     }
     
+    if ([_lastFailedUUID isEqualToString:visualizer.metaUUID])
+    {
+        _lastFailedCount++;
+    }
+    else
+    {
+        _lastFailedCount = 1;
+        _lastFailedUUID = visualizer.metaUUID;
+    }
+    
     [self resetVisualizerVar:visualizer keepCurrentMessage:YES];
     
     iSmartNewsLog(@"dispplayList : visualizerDidFail");
@@ -860,7 +907,24 @@ NSString* const envGateKey           = @"gate";
         [self.delegate displayListFailedToShowMessage:self];
     }
     
-    [self nothingWasPressed];
+    NSTimeInterval delay = 0.0f;
+    if (_lastFailedCount > 3)
+    {
+        delay = 1.0f;
+    }
+    else if (_lastFailedCount > 6)
+    {
+        delay = 10.0f;
+    }
+    
+    if (delay > 0.0f)
+    {
+        [self performSelector:@selector(nothingWasPressed) withObject:nil afterDelay:delay];
+    }
+    else
+    {
+        [self nothingWasPressed];
+    }
 }
 
 - (void)visualizerDidClickNothing:(iSmartNewsVisualizer*)visualizer
@@ -984,6 +1048,21 @@ NSString* const envGateKey           = @"gate";
         [self nothingWasPressed];
     }
     
+    [self _sendCallBackWithUserInfo:userInfo];
+}
+
+- (void)_sendCallBackWithUserInfo:(NSDictionary*) userInfo
+{
+    //Remove "type" key from userInfo for implement SN-19 (send callback by "onShow")
+    //Because for send onShow with domain "callback" we set fake type = "callquietly"
+    if ([userInfo isKindOfClass:[NSDictionary class]])
+    {
+        NSMutableDictionary* mutableUserInfo = [userInfo mutableCopy];
+        [mutableUserInfo removeObjectForKey:@"type"];
+        
+        userInfo = [mutableUserInfo copy];
+    }
+    
     NSDictionary* notificationUserInfo = nil;
     
     if (userInfo)
@@ -998,10 +1077,20 @@ NSString* const envGateKey           = @"gate";
         }
     }
     
-    [[NSNotificationQueue defaultQueue] enqueueNotification:[NSNotification notificationWithName:iSmartNewsDidOpenCallbackNotification object:self userInfo:notificationUserInfo]
-                                               postingStyle:NSPostWhenIdle
-                                               coalesceMask:NSNotificationNoCoalescing
-                                                   forModes:nil];
+    BOOL shouldSendCallbackNotification = YES;
+    
+    if ([[self delegate] respondsToSelector:@selector(displayList:shouldSendCallbackNotificationWithUserInfo:)])
+    {
+        shouldSendCallbackNotification = [[self delegate] displayList:self shouldSendCallbackNotificationWithUserInfo:notificationUserInfo];
+    }
+    
+    if (shouldSendCallbackNotification)
+    {
+        [[NSNotificationQueue defaultQueue] enqueueNotification:[NSNotification notificationWithName:iSmartNewsDidOpenCallbackNotification object:self userInfo:notificationUserInfo]
+                                                   postingStyle:NSPostWhenIdle
+                                                   coalesceMask:NSNotificationNoCoalescing
+                                                       forModes:nil];
+    }
     
     iSmartNewsLog(@"send callback with userInfo: %@", notificationUserInfo);
 }

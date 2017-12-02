@@ -13,6 +13,13 @@
 #import "iSmartNewsEmbeddedPanel.h"
 #import "iSmartNewsInternal.h"
 
+typedef enum : NSInteger
+{
+    UIScrollViewModeVertical   = 1,
+    UIScrollViewModeHorizontal = 2,
+    
+} UIScrollViewMode;
+
 const NSTimeInterval minAutoHideInterval       = 1.0f;
 const NSTimeInterval defaultAutoReloadInterval = 10.0f;
 
@@ -33,6 +40,8 @@ typedef enum : NSInteger
     BOOL _isReady;
     BOOL _isActive;
     
+    iSmartNewsContentStatus _status;
+    
     iSmartNewsEmbeddedPanelState _state;
     iSmartNewsDisplayList* _displayList;
     
@@ -47,8 +56,10 @@ typedef enum : NSInteger
 
 @synthesize delegate;
 
-@synthesize isReady = _isReady;
+@synthesize isReady  = _isReady;
 @synthesize isActive = _isActive;
+
+@synthesize status   = _status;
 
 -(void)_initInternal
 {
@@ -389,10 +400,23 @@ typedef enum : NSInteger
     [self dispatchRotationTimerAccordingShowingMessage];
 }
 
-- (void) placeContent:(UIView *)content
+-(void) placeContent:(UIView*) content
 {
+    [self placeContent:content status:iSmartNewsContentReady];
+}
+
+-(void) placeContent:(UIView*) content status:(iSmartNewsContentStatus) status
+{
+    if ((_contentView != nil) && (status == iSmartNewsContentLoading))
+    {
+        iSmartNewsLog(@"embeddedPanel : placeContent : skip loading content");
+        return;
+    }
+    
     [_contentView removeFromSuperview];
     _contentView = content;
+    
+    _status = status;
     
     if (content != nil)
     {
@@ -401,33 +425,13 @@ typedef enum : NSInteger
         
         [content setAutoresizingMask:(UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight)];
         
-        [self disableScrollForView:content level:4];
+        [content performSelector:@selector(configureContentSizeScaleAndBehaviour:) withObject:nil];
         
-        [self setIsReady:YES];
+        [self setIsReady:(_status == iSmartNewsContentReady)];
     }
     else
     {
         [self setIsReady:NO];
-    }
-}
-
--(void)disableScrollForView:(UIView*) view level:(NSUInteger) level
-{
-    if ([view isKindOfClass:[UIScrollView class]])
-    {
-        UIScrollView* scrollView = (UIScrollView*)view;
-        scrollView.scrollEnabled = NO;
-        return;
-    }
-    else
-    {
-        if (--level == 0)
-            return;
-
-        for (UIView* subview in [view subviews])
-        {
-            [self disableScrollForView:subview level:level];
-        }
     }
 }
 
@@ -541,6 +545,18 @@ typedef enum : NSInteger
     return 0;
 }
 
+#pragma mark CallBack logic
+-(BOOL)displayList:(iSmartNewsDisplayList *)displayList shouldSendCallbackNotificationWithUserInfo:(NSDictionary *)userInfo
+{
+    BOOL shouldSendCallbackNotification = YES;
+    
+    if ([[self delegate] respondsToSelector:@selector(shouldSendCallbackNotificationWithUserInfo:)])
+    {
+        shouldSendCallbackNotification = [[self delegate] shouldSendCallbackNotificationWithUserInfo:userInfo];
+    }
+    
+    return shouldSendCallbackNotification;
+}
 @end
 
 #endif//#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)

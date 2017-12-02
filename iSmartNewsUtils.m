@@ -16,7 +16,78 @@
 
 #import <zlib.h>
 
+#import <JavaScriptCore/JavaScriptCore.h>
+
 #import "iSmartNewsInternal.h"
+
+#import <errno.h>
+
+#if SMARTNEWS_COMPILE
+EXTERN_OR_STATIC INLINE_INTERNAL_ATTRIBUTES void sn_swizzleInstanceMethod(Class class, SEL old, SEL newSelector); //Used in UIScrollView(ex)
+#endif
+
+static char UIScrollViewExSettingsKey = 0;
+
+@implementation UIScrollView(ex)
+
+-(NSMutableDictionary*) _ex_settingsMake:(BOOL) make
+{
+    NSMutableDictionary* _ex_settings = objc_getAssociatedObject(self, &UIScrollViewExSettingsKey);
+    
+    if ((make == YES) && (_ex_settings == nil))
+    {
+        _ex_settings = [NSMutableDictionary new];
+        objc_setAssociatedObject(self, &UIScrollViewExSettingsKey, _ex_settings, OBJC_ASSOCIATION_RETAIN);
+    }
+    
+    return _ex_settings;
+}
+
+-(BOOL)horizontalScrollDisable
+{
+    return [[[self _ex_settingsMake:NO] objectForKey:@"horizontalScrollDisable"] boolValue];
+}
+
+-(void)setHorizontalScrollDisable:(BOOL)horizontalScrollDisable
+{
+    [[self _ex_settingsMake:horizontalScrollDisable] setObject:@(horizontalScrollDisable) forKey:@"horizontalScrollDisable"];
+}
+
+-(BOOL)verticalScrollDisable
+{
+    return [[[self _ex_settingsMake:NO] objectForKey:@"verticalScrollDisable"] boolValue];
+}
+
+-(void)setVerticalScrollDisable:(BOOL)verticalScrollDisable
+{
+    [[self _ex_settingsMake:verticalScrollDisable] setObject:@(verticalScrollDisable) forKey:@"verticalScrollDisable"];
+}
+
+-(void)_ex_setContentOffset:(CGPoint)contentOffset
+{
+    NSDictionary* _ex_settings = [self _ex_settingsMake:NO];
+    
+    if (_ex_settings)
+    {
+        if ([[_ex_settings objectForKey:@"verticalScrollDisable"] boolValue])
+        {
+            contentOffset.y = 0;
+        }
+    
+        if ([[_ex_settings objectForKey:@"horizontalScrollDisable"] boolValue])
+        {
+            contentOffset.x = 0;
+        }
+    }
+    
+    [self _ex_setContentOffset:contentOffset];
+}
+
++(void)load
+{
+    sn_swizzleInstanceMethod(self,@selector(setContentOffset:),@selector(_ex_setContentOffset:));
+}
+@end
 
 @implementation NSArray(SmartNews)
 - (BOOL)sn_isStrings{
@@ -101,6 +172,8 @@ void extractSmartNewsMessage(NSDictionary* desc, NSMutableDictionary* message)
     
     NSString* reviewType = (NSString*)getMessageKey(desc,@"review_type");
     
+    NSDictionary* style = (NSString*)getMessageKey(desc, @"style");
+    
     if ([allowAllIphoneOrientations isKindOfClass:[NSNumber class]]){
         [message setObject:allowAllIphoneOrientations forKey:@"allowAllIphoneOrientations"];
     }
@@ -140,6 +213,9 @@ void extractSmartNewsMessage(NSDictionary* desc, NSMutableDictionary* message)
     
     if (messageType && [messageType isKindOfClass:[NSString class]])
         [message setObject:messageType forKey:iSmartNewsMessageTypeKey];
+    
+    if (style && [style isKindOfClass:[NSDictionary class]])
+        [message setObject:style forKey:iSmartNewsMessageStyleKey];
     
     // Fill text if title was set
     if (![message objectForKey:iSmartNewsMessageTextKey] && [message objectForKey:iSmartNewsMessageTitleKey])
@@ -577,7 +653,7 @@ EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSString* sn_md5ForDictionary(NSDictionary*
             digest[14], digest[15]];
 }
 
-EXTERN_OR_STATIC void sn_swizzleInstanceMethod(Class class, SEL old, SEL newSelector)
+EXTERN_OR_STATIC INLINE_INTERNAL_ATTRIBUTES void sn_swizzleInstanceMethod(Class class, SEL old, SEL newSelector)
 {
     Method oldMethod = class_getInstanceMethod(class, old);
     Method newMethod = class_getInstanceMethod(class, newSelector);
@@ -1198,5 +1274,175 @@ NSString* stringFromNSURLComponents(NSURLComponents* components)
 }
 
 @end
+
+
+@interface NSDictionary (FlatlineCodec)
+@end
+
+@implementation NSDictionary (FlatlineCodec)
+
+-(NSString*) flatLineRepresentation:(NSError**) error
+{
+    NSMutableArray* lines = [NSMutableArray new];
+    NSMutableString* rootLine = [NSMutableString new];
+    
+    for (NSString* key in [self allKeys])
+    {
+        NSObject* value = [self objectForKey:key];
+        
+        if ([value isKindOfClass:[NSDictionary class]])
+        {
+            NSDictionary* subItems = (NSDictionary*)value;
+            
+            NSString* subLine = [subItems flatLineRepresentation:error];
+            if ([subLine length] > 0)
+            {
+                NSString* line = [NSString stringWithFormat:@"%@_%@", key, subLine];
+                [lines addObject:line];
+            }
+        }
+        else
+        {
+            const char* entry = NULL;
+            
+            entry = strpbrk([key UTF8String], "_:|");
+            if (entry != NULL)
+            {
+                if (error != nil)
+                    *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:EINVAL userInfo:@{@"reason" : @"key contains eeserved characters"}];
+                
+                return nil;
+            }
+            
+            if ([value isKindOfClass:[NSString class]] != YES)
+            {
+                if (error != nil)
+                    *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:EINVAL userInfo:@{@"reason" : @"value are invalid"}];
+                
+                return nil;
+            }
+            
+            entry = strpbrk([(NSString*)value UTF8String], "_:|");
+            
+            if (entry != NULL)
+            {
+                if (error != nil)
+                    *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:EINVAL userInfo:@{@"reason" : @"value contains eeserved characters"}];
+    
+                return nil;
+            }
+            
+            if ([rootLine length] > 0)
+            {
+                [rootLine appendString:@"_"];
+            }
+            
+            [rootLine appendFormat:@"%@:%@", key, value];
+        }
+    }
+    
+    if ([rootLine length] > 0)
+    {
+        [lines insertObject:[rootLine copy] atIndex:0];
+    }
+    
+    NSString* result = [lines componentsJoinedByString:@"|"];
+    return result;
+}
+
++(NSDictionary*) dictionaryFromFlatLine:(NSString*) flatLine optionAliases:(NSString*) optionAliases
+{
+    NSMutableDictionary* result = [NSMutableDictionary new];
+    
+    NSDictionary* keyAliases = nil;
+    
+    if ([optionAliases length] > 0)
+    {
+        keyAliases = [self dictionaryFromFlatLine:optionAliases optionAliases:nil];
+    }
+    
+    NSArray* lines = [flatLine componentsSeparatedByString:@"|"];
+    
+    for (NSString* line in lines)
+    {
+        NSMutableDictionary* subItems = [NSMutableDictionary new];
+        NSString* prefix = @"";
+        NSArray* components = [line componentsSeparatedByString:@"_"];
+
+        for (NSString* component in components)
+        {
+            if ([component containsString:@":"])
+            {
+                NSArray* kv = [component componentsSeparatedByString:@":"];
+                
+                NSString* value = [kv lastObject];
+                NSString* key   = [kv firstObject];
+                
+                NSString* key2 = [keyAliases objectForKey:key];
+                if (key2) { key = key2; }
+                
+                [subItems setValue:value forKey:key];
+            }
+            else
+            {
+                if ([prefix length] == 0)
+                {
+                    prefix = component;
+                }
+                else
+                {
+                    prefix = [NSString stringWithFormat:@"%@_%@", prefix, component];
+                }
+            }
+        }
+        
+        if ([prefix length] > 0)
+        {
+            [result setValue:[subItems copy] forKey:prefix];
+        }
+        else
+        {
+            [result addEntriesFromDictionary:subItems];
+        }
+    }
+    
+    return [result copy];
+}
+
+#if DEBUG || ADHOC
++(void)load
+{
+    //Auto tests
+    dispatch_async(dispatch_get_main_queue(), ^{
+        
+        NSDictionary* test1 = @{
+                                @"mode_1" : @{
+                                                @"param1" : @"xxx",
+                                                @"param2" : @"2222",
+                                                },
+                                
+                                @"mode_2" : @{
+                                        @"parama" : @"aaaaaaaa",
+                                        @"paramb" : @"0987654321",
+                                        },
+                                
+                                @"rootparam"   : @"value-x",
+                                @"root.param2" : @"value.y",
+                                
+                                };
+        
+        NSString* test1_fl = [test1 flatLineRepresentation:nil];
+        
+        NSDictionary* test1_restore = [NSDictionary dictionaryFromFlatLine:test1_fl optionAliases:nil];
+        
+        assert([test1_restore isEqualToDictionary:test1]);
+        
+    });
+}
+#endif
+@end
+
+
+
 
 #endif//#if (SMARTNEWS_COMPILE || SMARTNEWS_COMPILE_DEVELOP)

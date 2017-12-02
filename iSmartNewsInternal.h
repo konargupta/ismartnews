@@ -67,6 +67,7 @@ typedef NS_ENUM(NSInteger, iSmartNewsSaveLastShowResult)
 #   define STR_SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(v) ([[[UIDevice currentDevice] systemVersion] compare:v options:NSNumericSearch] != NSOrderedAscending)
 #endif
 
+static iSmartNewsAdditionalObjectDescriptionsGetter gAdditionalObjectDescriptionsGetter;
 
 @interface iSmartNews()
 @property (nonatomic,strong,readonly) NSString* service;

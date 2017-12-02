@@ -157,13 +157,14 @@ extern NSString*  const  iSmartNewsMessageRemindKey;
  @}
  */
 
-extern NSString*  const  iSmartNewsMessageReviewTypeKey;
+extern NSString*  const iSmartNewsMessageReviewTypeKey;
+
+extern NSString*  const iSmartNewsMessageStyleKey;
 
 static const char iSmartNews_hideStatusbar_originalKey;
 static const char iSmartNews_hideStatusbarKey;
 
-
-//Encrypted version of string @"iSmart"
+//Prefix version of string @"iSmart"
 EXTERN_OR_STATIC INLINE_INTERNAL_ATTRIBUTES NSString* _str_i_smrt()
 {
     return @"iSmart";
@@ -173,7 +174,6 @@ EXTERN_OR_STATIC INLINE_INTERNAL_ATTRIBUTES NSString* _str_i_smrt_news()
 {
     return @"iSmartNews";
 }
-
 
 /*! @cond SkipThis
  ----------------------------------------------------------------------------
@@ -237,6 +237,9 @@ EXTERN_OR_STATIC INLINE_INTERNAL_ATTRIBUTES NSString* _str_i_smrt_news()
 #import "iSmartNewsInternal.h"
 
 static iSmartNewsAllowBlock gCanIShowAlertViewRightNow = nil;
+
+static iSmartNewsAdditionalObjectDescriptionsGetter gAdditionalObjectDescriptionsGetter = nil;
+
 static iSmartNewsAllowBlock g_fetchHandler = nil;
 
 NSString*  const  iSmartNewsMessageTitleKey     = @"iSmartNewsMessageTitleKey";         //  NSString, message title
@@ -256,7 +259,9 @@ NSString*  const  iSmartNewsMessageAlwaysKey    = @"iSmartNewsMessageAlwaysKey";
 NSString*  const  iSmartNewsMessageCounterKey   = @"iSmartNewsMessageCounterKey";       //  NSNumber
 NSString*  const  iSmartNewsMessageQueueKey     = @"iSmartNewsMessageQueueKey";         //  NSString, name of queue
 
-NSString*  const iSmartNewsMessageTypeKey             = @"iSmartNewsMessageTypeKey";          //  NSString, type of message. "web" for web content
+NSString*  const iSmartNewsMessageTypeKey       = @"iSmartNewsMessageTypeKey";          //  NSString, type of message. "web" for web content
+
+NSString*  const iSmartNewsMessageStyleKey      = @"iSmartNewsMessageStyleKey";         //  NSString, description of animation, show loading and etc.
 
 NSString*  const iSmartNewsContentTypeWeb             = @"web";
 NSString*  const iSmartNewsContentTypeDirectAction    = @"directAction";
@@ -709,6 +714,11 @@ static NSMutableDictionary* services = nil;
 + (void)setCanIShowAlertViewRightNowHandler:(iSmartNewsAllowBlock)CanIShowAlertViewRightNow
 {
     gCanIShowAlertViewRightNow = [CanIShowAlertViewRightNow copy];
+}
+
++ (void)setAdditionalObjectDescriptionsGetter:(iSmartNewsAdditionalObjectDescriptionsGetter) additionalObjectDescriptionsGetter
+{
+    gAdditionalObjectDescriptionsGetter = [additionalObjectDescriptionsGetter copy];
 }
 
 + (void)setAllowFetchHandler:(iSmartNewsAllowBlock)fetchHandler
@@ -1710,7 +1720,6 @@ static NSMutableDictionary* services = nil;
     _currentNews = [data copy];
     
     const BOOL emulateAppActivate = [[userInfo objectForKey:@"emulateAppActivate"] boolValue];
-    
     
     [self parseEvents:_currentNews];
     

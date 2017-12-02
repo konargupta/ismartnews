@@ -7,6 +7,11 @@
 #import <UIKit/UIKit.h>
 #import "iSmartNewsPublic.h"
 
+@interface UIScrollView(ex)
+@property (nonatomic, assign) BOOL verticalScrollDisable;
+@property (nonatomic, assign) BOOL horizontalScrollDisable;
+@end
+
 @interface NSArray(SmartNews)
 - (NSString*_Nonnull)sn_join:(NSString*_Nonnull)sep;
 - (BOOL)sn_isStrings;

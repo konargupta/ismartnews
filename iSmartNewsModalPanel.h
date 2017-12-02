@@ -70,6 +70,9 @@ typedef void (^iSmartNewsUAModalDisplayPanelAnimationComplete)(BOOL finished);
 
 @property (nonatomic, assign) BOOL          showRemoveAdsButton;
 
+@property (nonatomic, weak)   id            hideAnimationTarget;
+@property (nonatomic, assign) SEL           hideAnimationAction;
+
 - (void)show;
 - (void)showFromPoint:(CGPoint)point;
 //- (void)hide:(iSmartNewsPanelCloseType)type;

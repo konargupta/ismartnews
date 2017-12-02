@@ -43,6 +43,7 @@ extern BOOL sn_AppUpgradeDone();
 @property (nullable, nonatomic, retain) NSString *sequence;
 @property (nullable, nonatomic, retain) NSString *sequenceSrc;
 
+@property (nullable, nonatomic, retain) NSString *urlFixed;
 @property (nullable, nonatomic, retain) NSNumber *urlIndex; //url index for show
 @property (nullable, nonatomic, retain) NSString *urls;
 @property (nullable, nonatomic, retain) NSString *urlsSrc;
@@ -54,19 +55,29 @@ extern BOOL sn_AppUpgradeDone();
 
 @property (nullable, nonatomic, retain) NSNumber *showOnlyIfUpgrade;
 
-@property (nullable, nonatomic, retain) NSString *removeAdsAction; //Action URL
-@property (nullable, nonatomic, retain) NSString *onShow;          //Notice URL
+@property (nullable, nonatomic, retain) NSString* removeAdsAction; //Action URL
+@property (nullable, nonatomic, retain) NSString* onShow;          //Notice URL
 
+// Since v4.2.1
 @property (nullable, nonatomic, retain) NSNumber *oncePerInstall;
 @property (nullable, nonatomic, retain) NSString *oncePerInstallCondition;
 @property (nullable, nonatomic, retain) NSNumber *oncePerInstallShown;
 
+// Since v4.4.1
 @property (nullable, nonatomic, retain) NSString *segment;
 
+// Since v4.7 alpha
 @property (nullable, nonatomic, retain) NSNumber *autoHideInterval;
 @property (nullable, nonatomic, retain) NSNumber *notPresented;
 
+// Since v4.8.4
+@property (nullable, nonatomic, retain) NSString *cond_skip;
+@property (nullable, nonatomic, retain) NSString *cond_show;
+
 - (void)randomizeUrlsAndSequence;
+- (void)gotoNextUrl;
+- (nullable NSString*)getCurrentURLString;
+
 - (BOOL)checkMinShowInterval;
 - (BOOL)checkAllowedForInstall;
 - (BOOL)checkAllowedForVersion;

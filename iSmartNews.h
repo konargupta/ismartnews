@@ -1,6 +1,6 @@
 /*!
  @file       iSmartNews.h
- @version    4.6.1
+ @version    4.9.6
  */
 
 #import <Foundation/Foundation.h>
@@ -9,11 +9,11 @@
 
 #define ISMART_NEWS_MAKE_VERSION(MAJOR,MINOR,PATCH)       ((MAJOR*1000*1000) + (MINOR*1000) + PATCH)
 
-#define ISMART_NEWS_VERSION_4_6_1       ISMART_NEWS_MAKE_VERSION(4,6,1)
+#define ISMART_NEWS_VERSION_4_9_6       ISMART_NEWS_MAKE_VERSION(4,9,6)
 
-#define ISMART_NEWS_CURRENT_VERSION     ISMART_NEWS_VERSION_4_6_1
+#define ISMART_NEWS_CURRENT_VERSION     ISMART_NEWS_VERSION_4_9_6
 
-#define iSmartNewsVersion               @"4.6.1"
+#define iSmartNewsVersion               @"4.9.6"
 
 extern NSString* const iSmartNewsUserDidOpenReviewNotification;
 extern NSString* const iSmartNewsDidOpenCallbackNotification;
@@ -24,6 +24,8 @@ extern NSString* const iSmartNewsDidCloseNewsItemNotification;
 @class iSmartNews;
 
 typedef BOOL (^iSmartNewsAllowBlock)(iSmartNews* smartNews);
+typedef void (^iSmartNewsDescriptionsGetterCompletion)       (NSDictionary* descriptions, BOOL success);
+typedef BOOL (^iSmartNewsAdditionalObjectDescriptionsGetter) (NSDictionary* additionalObjectDescriptionsRequest, iSmartNewsDescriptionsGetterCompletion completion);
 
 /*!
  @class  iSmartNews
@@ -72,12 +74,19 @@ typedef BOOL (^iSmartNewsAllowBlock)(iSmartNews* smartNews);
 + (void)setCanIShowAlertViewRightNowHandler:(iSmartNewsAllowBlock)CanIShowAlertViewRightNow;
 
 /*!
+ @brief
+     Sets handler to pass additional info for WebPage before show it.
+     If handler returns YES, then SmartNews will wait for the completion callback.
+     Otherwise (If handler returns NO) SmartNews continue use default values passed to handler.
+ */
++ (void)setAdditionalObjectDescriptionsGetter:(iSmartNewsAdditionalObjectDescriptionsGetter) additionalObjectDescriptionsGetter;
+
+/*!
     @brief
         Set handler controlling fetching news file from server
- */
+*/
+
 + (void)setAllowFetchHandler:(iSmartNewsAllowBlock)fetchHandler;
-
-
 - (void)setRemoveAdsActionBlock:(void(^)())block;
 
 + (iSmartNews*)newsForService:(NSString*)name;
@@ -114,7 +123,6 @@ typedef BOOL (^iSmartNewsAllowBlock)(iSmartNews* smartNews);
 - (void)markReviewAsShown;
 
 @end
-
 
 #define iSmartNews_SetRemoveAdsAction(block)                                    \
     [[iSmartNews sharedNews] setRemoveAdsActionBlock:block];

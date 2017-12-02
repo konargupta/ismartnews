@@ -298,6 +298,39 @@ INTERNAL_ATTRIBUTES NSDate* sn_preprocessDate(id date)
     return [calendar dateFromComponents:components];
 };
 
+EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSString* sn_preprocessConditionValue(id condition)
+{
+    if ([condition isKindOfClass:[NSString class]])
+    {
+        NSArray* c = [[(NSString*)condition stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] componentsSeparatedByString:@"|"];
+        NSMutableArray* trimmed = [NSMutableArray arrayWithCapacity:[c count]];
+        for (NSString* s in c)
+        {
+            [trimmed addObject:[s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]];
+        }
+            
+        return [trimmed componentsJoinedByString:@"|"];
+    }
+    else if ([condition isKindOfClass:[NSArray class]])
+    {
+        NSMutableArray* trimmed = [NSMutableArray arrayWithCapacity:[(NSArray*)condition count]];
+        for (NSString* s in condition)
+        {
+            if (![s isKindOfClass:[NSString class]])
+            {
+                continue;
+            }
+            [trimmed addObject:[s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]];
+        }
+            
+        return [trimmed componentsJoinedByString:@"|"];
+    }
+    else
+    {
+        return @"";
+    }
+}
+
 EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSArray* sn_preprocessMeta(NSString* serviceName, NSArray* input, NSMutableSet* metaUuid)
 {
     NSDate*  launchDate = [[iSmartNews newsForService:serviceName] launchDate];
@@ -379,6 +412,7 @@ EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSArray* sn_preprocessMeta(NSString* servic
         NSArray* dates = getMessageKey(meta,@"dates");
         NSString* queue = getMessageKey(meta, @"queue");
         NSNumber* randomize = getMessageKey(meta,@"randomize");
+        NSString* fixUrl    = getMessageKey(meta, @"fixurl");
         NSString* orientations = getMessageKey(meta,@"orientations");
         if (![orientations isKindOfClass:[NSString class]]){
             orientations = @"up";
@@ -841,19 +875,38 @@ EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSArray* sn_preprocessMeta(NSString* servic
         
 //INFO: new SmartNewsItem
         SmartNewsItem *item = [items lastObject];
-        if (!item){
+        if (!item)
+        {
             item = [NSEntityDescription insertNewObjectForEntityForName:@"SmartNewsItem" inManagedObjectContext:context];
-            if (!item){
+            if (!item)
+            {
                 return NO;
             }
+            
             [item setValue:uuid forKey:@"uuid"];
         }
         
-        if ([randomize isKindOfClass:[NSNumber class]]){
+        if ([randomize isKindOfClass:[NSNumber class]])
+        {
             [item setValue:@([randomize boolValue]) forKey:@"randomize"];
         }
-        else {
+        else
+        {
             [item setValue:@(NO) forKey:@"randomize"];
+        }
+        
+        //Set only if "urlFixed" are empty
+        if ((item.urlFixed == nil) || ([item.urlFixed length] == 0))
+        {
+            BOOL setUrlFixed = NO;
+            
+            if      ( ([fixUrl isKindOfClass:[NSNumber class]]) && ([fixUrl boolValue])    )
+                setUrlFixed = YES;
+            else if ( ([fixUrl isKindOfClass:[NSString class]]) && ([fixUrl intValue] > 0) )
+                setUrlFixed = YES;
+            
+            if (setUrlFixed)
+                item.urlFixed = @"!!!";
         }
         
         [item setValue:oncePerVersion forKey:@"oncePerVersion"];
@@ -883,64 +936,46 @@ EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSArray* sn_preprocessMeta(NSString* servic
         NSNumber* showOnlyIfUpgrade = [meta iSmartNews_objectForKey:@"showOnlyIfUpgrade"];
         [item setValue:@([showOnlyIfUpgrade isKindOfClass:[NSNumber class]] ? [showOnlyIfUpgrade boolValue] : NO) forKey:@"showOnlyIfUpgrade"];
         
-        // bids_show
-        {
-            id bids_show = [meta iSmartNews_objectForKey:@"showIfApps"];
-            if ([bids_show isKindOfClass:[NSString class]]){
-                NSArray* c = [[bids_show stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] componentsSeparatedByString:@"|"];
-                NSMutableArray* trimmed = [NSMutableArray arrayWithCapacity:[c count]];
-                for (NSString* s in c){
-                    [trimmed addObject:[s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]];
-                }
-                
-                [item setValue:[trimmed componentsJoinedByString:@"|"] forKey:@"bids_show"];
-            }
-            else if ([bids_show isKindOfClass:[NSArray class]]){
-                
-                NSMutableArray* trimmed = [NSMutableArray arrayWithCapacity:[bids_show count]];
-                for (NSString* s in bids_show){
-                    if (![s isKindOfClass:[NSString class]]){
-                        continue;
-                    }
-                    [trimmed addObject:[s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]];
-                }
-                
-                [item setValue:[trimmed componentsJoinedByString:@"|"] forKey:@"bids_show"];
-            }
-            else {
-                [item setValue:@"" forKey:@"bids_show"];
-            }
-        }
         
+        // bids_show
+        id bids_show = sn_preprocessConditionValue([meta iSmartNews_objectForKey:@"showIfApps"]);
+        [item setValue:bids_show forKey:@"bids_show"];
         
         // bids_skip
+        id bids_skip = sn_preprocessConditionValue([meta iSmartNews_objectForKey:@"skipIfApps"]);
+        [item setValue:bids_skip forKey:@"bids_skip"];
+        
+        //cond_skip
+        id cond_skip = sn_preprocessConditionValue([meta iSmartNews_objectForKey:@"skipIf"]);
+        [item setValue:cond_skip forKey:@"cond_skip"];
+        
+        //cond_show
+        id cond_show = sn_preprocessConditionValue([meta iSmartNews_objectForKey:@"showIf"]);
+        [item setValue:cond_show forKey:@"cond_show"];
+        
+        //Style
+        NSObject* style = [meta iSmartNews_objectForKey:@"style"];
+        NSString* styleDescription = nil;
+        
+        NSError* styleError = nil;
+        if ([style isKindOfClass:[NSString class]])
         {
-            id bids_skip = [meta iSmartNews_objectForKey:@"skipIfApps"];
-            if ([bids_skip isKindOfClass:[NSString class]]){
-                NSArray* c = [[bids_skip stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] componentsSeparatedByString:@"|"];
-                NSMutableArray* trimmed = [NSMutableArray arrayWithCapacity:[c count]];
-                for (NSString* s in c){
-                    [trimmed addObject:[s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]];
-                }
-                
-                [item setValue:[trimmed componentsJoinedByString:@"|"] forKey:@"bids_skip"];
-            }
-            else if ([bids_skip isKindOfClass:[NSArray class]]){
-                
-                NSMutableArray* trimmed = [NSMutableArray arrayWithCapacity:[bids_skip count]];
-                for (NSString* s in bids_skip){
-                    if (![s isKindOfClass:[NSString class]]){
-                        continue;
-                    }
-                    [trimmed addObject:[s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]];
-                }
-                
-                [item setValue:[trimmed componentsJoinedByString:@"|"] forKey:@"bids_skip"];
-            }
-            else {
-                [item setValue:@"" forKey:@"bids_skip"];
-            }
+            styleDescription = [(NSString*)style lowercaseString];
+            styleDescription = sn_preprocessConditionValue(styleDescription);
+            
+            NSDictionary* styleParsed = [NSDictionary dictionaryFromFlatLine:styleDescription optionAliases:@"anim:animation_ind:indicator_bg:background"];
+            styleDescription = [styleParsed flatLineRepresentation:&styleError];
         }
+        else if ([style isKindOfClass:[NSDictionary class]])
+        {
+            styleDescription = [(NSDictionary*)style flatLineRepresentation:&styleError];
+            styleDescription = [styleDescription lowercaseString];
+        }
+        
+        if ((styleError != nil) && ([styleDescription length] == 0))
+            styleDescription = @"";
+        
+        [item setValue:styleDescription forKey:@"style"];
         
         [item setValue:minShowInterval forKey:@"minShowInterval"];
         [item setValue:start forKey:@"start"];
@@ -1366,6 +1401,74 @@ EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSArray* sn_metaNews(NSString* serviceName,
         [allNews addObject:metaItem];
     }
     
+    // filter by bids_show/skip
+    __block NSArray* bids;
+    
+    allNews = [[allNews filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id obj, NSDictionary* b){
+        
+        if (![[iSmartNewsSegment sharedSegment] matches:[obj valueForKey:@"segment"]]){
+            return NO;
+        }
+
+        if ([obj valueForKey:@"bids_show"] && ![[obj valueForKey:@"bids_show"] isEqualToString:@""]){
+            NSArray* bids_show = [[obj valueForKey:@"bids_show"] componentsSeparatedByString:@"|"];
+            
+            if ([bids_show count] > 0){
+                BOOL show = NO;
+                for (NSString* bid in bids_show){
+                    if (![bid isEqualToString:@""]){
+                        
+                        if (!bids){
+
+                            bids = nil;
+                            if (!bids){
+                                return YES;
+                            }
+                        }
+                        
+                        if ([bids indexOfObject:bid] != NSNotFound){
+                            show = YES;
+                            break;
+                        }
+                    }
+                }
+                if (!show){
+                    return NO;
+                }
+            }
+        }
+        
+        if ([obj valueForKey:@"bids_skip"] && ![[obj valueForKey:@"bids_skip"] isEqualToString:@""]){
+            NSArray* bids_skip = [[obj valueForKey:@"bids_skip"] componentsSeparatedByString:@"|"];
+            
+            if ([bids_skip count] > 0){
+                BOOL skip = NO;
+                for (NSString* bid in bids_skip){
+                    if (![bid isEqualToString:@""]){
+                        
+                        if (!bids){
+                            bids = nil;
+                            if (!bids){
+                                return YES;
+                            }
+                        }
+                        
+                        if ([bids indexOfObject:bid] != NSNotFound){
+                            skip = YES;
+                            break;
+                        }
+                    }
+                }
+                if (skip){
+                    return NO;
+                }
+            }
+        }
+        
+        return YES;
+    }]] mutableCopy];
+    
+    
     for (NSManagedObject* metaItem in [allNews copy]){
         
         NSString* urlsSrc = [metaItem valueForKey:@"urlsSrc"];
@@ -1411,21 +1514,10 @@ EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSArray* sn_metaNews(NSString* serviceName,
         
         NSMutableDictionary* message = [NSMutableDictionary new];
         
-        NSArray* urls = [[metaItem valueForKey:@"urls"] componentsSeparatedByString:@"!!!"];
+        NSString* url = [(SmartNewsItem*)metaItem getCurrentURLString];
         
-        NSUInteger urlIndex = 0;
-        if ([[metaItem valueForKey:@"sequence"] length] > 0){
-            urlIndex = (NSUInteger)[[[[metaItem valueForKey:@"sequence"] componentsSeparatedByString:@"|"] objectAtIndex:0] intValue];
-        }
-        else{
-            urlIndex = [[metaItem valueForKey:@"urlIndex"] unsignedIntegerValue];
-        }
-        
-        if (urlIndex >= [urls count]){
+        if (url == nil)
             continue;
-        }
-        
-        NSString* url = [urls objectAtIndex:urlIndex];
         
         if ([metaItem valueForKey:@"minDelay"] && [metaItem valueForKey:@"maxDelay"]){
             [message setObject:[metaItem valueForKey:@"minDelay"] forKey:@"minDelay"];
@@ -1468,6 +1560,12 @@ EXTERN_OR_STATIC INTERNAL_ATTRIBUTES NSArray* sn_metaNews(NSString* serviceName,
         NSString* orientations = [metaItem valueForKey:@"orientations"];
         if (orientations){
             [message setObject:orientations forKey:@"orientations"];
+        }
+        
+        NSString* style = [metaItem valueForKey:@"style"];
+        if (style){
+            NSDictionary* styleParsed = [NSDictionary dictionaryFromFlatLine:style optionAliases:nil];
+            [message setObject:styleParsed forKey:iSmartNewsMessageStyleKey];
         }
         
         NSURLComponents* components = [NSURLComponents componentsWithString:url];

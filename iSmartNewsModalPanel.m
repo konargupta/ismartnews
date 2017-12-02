@@ -21,9 +21,14 @@
 #define DEFAULT_BOUNCE				YES
 
 @implementation iSmartNewsModalPanel
+{
+    iSmartNewsContentStatus _status;
+}
 
 @synthesize roundedRect, closeButton, actionButton, delegate = _delegate, contentView, contentContainer, removeAdsButton;
 @synthesize margin, padding, cornerRadius, borderWidth, borderColor, contentColor, shouldBounce;
+
+@synthesize status = _status;
 
 - (void)setShowRemoveAdsButton:(BOOL)showRemoveAdsButton{
     [[self removeAdsButton] setHidden:!showRemoveAdsButton];
@@ -89,6 +94,11 @@
 
 -(void) placeContent:(UIView*) content
 {
+    [self placeContent:content status:iSmartNewsContentReady];
+}
+
+-(void) placeContent:(UIView*) content status:(iSmartNewsContentStatus) status
+{
     for (UIView* subview in [[self contentView] subviews])
     {
         if ([content isEqual:subview])
@@ -99,6 +109,7 @@
     
     if (content != nil)
     {
+        _status = status;
         [[self contentView] addSubview:content];
         
         CGRect frame = [[self contentView] frame];
@@ -409,11 +420,10 @@
     
     if ([self.customAnimation isEqualToString:@"fade"])
     {
-        
         self.contentContainer.transform = CGAffineTransformIdentity;
         
         // Show the view right away
-        [UIView animateWithDuration:0.3
+        [UIView animateWithDuration:0.3f
                               delay:0.0
                             options:UIViewAnimationOptionCurveEaseOut
                          animations:^{
@@ -422,7 +432,24 @@
                          completion:^(BOOL finished) {
             [self showAnimationFinished];
         }];
-
+    }
+    else if ([self.customAnimation isEqualToString:@"modal"])
+    {
+        self.contentContainer.transform = CGAffineTransformIdentity;
+        self.contentContainer.center    = CGPointMake(self.center.x, self.center.y + self.frame.size.height);
+        
+        // Show the view right away
+        [UIView animateWithDuration:0.3
+                              delay:0.0
+                            options:UIViewAnimationOptionCurveEaseOut
+                         animations:^{
+                             
+                             self.contentContainer.center = self.center;
+                             self.alpha = 1.0;
+                         }
+                         completion:^(BOOL finished) {
+                             [self showAnimationFinished];
+                         }];
     }
     else
     {
@@ -511,11 +538,30 @@
     }
     else
     {
+        if (self.hideAnimationTarget)
+        {
+            [[self hideAnimationTarget] performSelector:self.hideAnimationAction withObject:self];
+        }
+        
         if ([self.customAnimation isEqualToString:@"fade"])
         {
             // Hide the view right away
             [UIView animateWithDuration:0.3
                              animations:^{
+                                 self.alpha = 0;
+                             }
+                             completion:^(BOOL finished){
+                                 
+                                 removeFromSuperViewAndCallDelegate();
+                             }];
+        }
+        else if ([self.customAnimation isEqualToString:@"modal"])
+        {
+            // Hide the view right away
+            [UIView animateWithDuration:0.3
+                             animations:^{
+                                 
+                                 self.contentContainer.center = CGPointMake(self.center.x, self.center.y + self.frame.size.height);
                                  self.alpha = 0;
                              }
                              completion:^(BOOL finished){
